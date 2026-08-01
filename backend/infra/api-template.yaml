@@ -1,0 +1,125 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  infra/api-template.yaml — Go API Lambda + API Gateway HTTP API.
+#
+#  DEPLOY (after infra/dynamodb-table.yaml is already deployed):
+#    aws ecr create-repository --repository-name marginpulse-api --region ap-south-1
+#    aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.ap-south-1.amazonaws.com
+#    docker build -f cmd/api/Dockerfile -t marginpulse-api .
+#    docker tag marginpulse-api:latest <account-id>.dkr.ecr.ap-south-1.amazonaws.com/marginpulse-api:latest
+#    docker push <account-id>.dkr.ecr.ap-south-1.amazonaws.com/marginpulse-api:latest
+#    sam build -t infra/api-template.yaml
+#    sam deploy --guided -t infra/api-template.yaml
+#
+#  NOTE vs. the Python version's api-template.yaml: ImageConfig.Command is
+#  NOT set here — a Go Lambda container image built from
+#  public.ecr.aws/lambda/provided:al2023 (see cmd/api/Dockerfile) always
+#  runs whatever binary is named `bootstrap`, so there's no per-function
+#  handler string to configure the way Python's "main.handler" needed.
+# ═══════════════════════════════════════════════════════════════════════════
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: MarginPulse Pro (Go) — API on Lambda + API Gateway
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: ECR image URI built from cmd/api/Dockerfile
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [staging, production]
+  DynamoDBTableName:
+    Type: String
+    Description: Output of infra/dynamodb-table.yaml
+  RedisURL:
+    Type: String
+    NoEcho: true
+  JWTSecretKey:
+    Type: String
+    NoEcho: true
+  AppSecretKey:
+    Type: String
+    NoEcho: true
+  FieldEncryptionKey:
+    Type: String
+    NoEcho: true
+  SQSQueueUrlOcr:
+    Type: String
+  SQSQueueUrlReconcile:
+    Type: String
+  SQSQueueUrlGst:
+    Type: String
+  SQSQueueUrlTaxIdentifier:
+    Type: String
+  SQSQueueUrlBankAccount:
+    Type: String
+  AlarmNotificationEmail:
+    Type: String
+
+Globals:
+  Function:
+    PackageType: Image
+    MemorySize: 512
+    Timeout: 29
+    Environment:
+      Variables:
+        APP_ENV: !Ref Environment
+        DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
+        AWS_REGION: !Ref AWS::Region
+        REDIS_URL: !Ref RedisURL
+        JWT_SECRET_KEY: !Ref JWTSecretKey
+        APP_SECRET_KEY: !Ref AppSecretKey
+        FIELD_ENCRYPTION_KEY: !Ref FieldEncryptionKey
+        SQS_QUEUE_URL_OCR: !Ref SQSQueueUrlOcr
+        SQS_QUEUE_URL_RECONCILE: !Ref SQSQueueUrlReconcile
+        SQS_QUEUE_URL_GST: !Ref SQSQueueUrlGst
+        SQS_QUEUE_URL_TAX_IDENTIFIER: !Ref SQSQueueUrlTaxIdentifier
+        SQS_QUEUE_URL_BANK_ACCOUNT: !Ref SQSQueueUrlBankAccount
+
+Resources:
+  ApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub marginpulse-api-go-${Environment}
+      ImageUri: !Ref ImageUri
+      Events:
+        ApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref HttpApi
+            Path: /{proxy+}
+            Method: ANY
+
+  HttpApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub marginpulse-api-go-alarms-${Environment}
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlarmNotificationEmail
+
+  ApiErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub marginpulse-api-go-error-rate-${Environment}
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ApiFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [!Ref AlarmTopic]
+
+Outputs:
+  ApiUrl:
+    Description: Base URL — set this as the frontend's API base URL
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"

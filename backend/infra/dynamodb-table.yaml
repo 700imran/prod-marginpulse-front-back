@@ -1,0 +1,133 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  infra/dynamodb-table.yaml — the single DynamoDB table backing the
+#  entire Go backend (API + worker both read/write this same table).
+#  Deploy this ONCE, before deploying either the API or worker stacks.
+#
+#  CAPACITY: PROVISIONED mode (not on-demand) — this is deliberate.
+#  AWS's DynamoDB free tier (25 GB storage + 25 WCU + 25 RCU, forever,
+#  not a 12-month trial) only applies to PROVISIONED capacity, shared as
+#  an ACCOUNT-WIDE budget across every table and GSI. This table has 3
+#  GSIs (4 capacity groups total: base table + GSI1 + GSI2 + GSI3) — each
+#  given 6 RCU/6 WCU below (24/24 total), safely inside the 25/25 budget
+#  with headroom. See DYNAMODB_SCHEMA.md for the full key-design writeup.
+#
+#  DEPLOY:
+#    aws cloudformation deploy --template-file infra/dynamodb-table.yaml \
+#      --stack-name marginpulse-dynamodb --parameter-overrides Environment=production
+# ═══════════════════════════════════════════════════════════════════════════
+AWSTemplateFormatVersion: "2010-09-09"
+Description: MarginPulse Pro (Go) — single-table DynamoDB design
+
+Parameters:
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [staging, production]
+
+Resources:
+  MarginPulseTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub marginpulse-${Environment}
+      BillingMode: PROVISIONED
+      ProvisionedThroughput:
+        ReadCapacityUnits: 6
+        WriteCapacityUnits: 6
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+        - AttributeName: gsi1pk
+          AttributeType: S
+        - AttributeName: gsi1sk
+          AttributeType: S
+        - AttributeName: gsi2pk
+          AttributeType: S
+        - AttributeName: gsi2sk
+          AttributeType: S
+        - AttributeName: gsi3pk
+          AttributeType: S
+        - AttributeName: gsi3sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: gsi1pk
+              KeyType: HASH
+            - AttributeName: gsi1sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 6
+            WriteCapacityUnits: 6
+        - IndexName: GSI2
+          KeySchema:
+            - AttributeName: gsi2pk
+              KeyType: HASH
+            - AttributeName: gsi2sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 6
+            WriteCapacityUnits: 6
+        - IndexName: GSI3
+          KeySchema:
+            - AttributeName: gsi3pk
+              KeyType: HASH
+            - AttributeName: gsi3sk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+          ProvisionedThroughput:
+            ReadCapacityUnits: 6
+            WriteCapacityUnits: 6
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # Alarms if consumed capacity approaches the provisioned ceiling —
+  # early warning before throttling starts, per the "no cost increase,
+  # no surprise" requirement.
+  ReadThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub marginpulse-dynamodb-read-throttle-${Environment}
+      Namespace: AWS/DynamoDB
+      MetricName: ReadThrottleEvents
+      Dimensions:
+        - Name: TableName
+          Value: !Ref MarginPulseTable
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+
+  WriteThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub marginpulse-dynamodb-write-throttle-${Environment}
+      Namespace: AWS/DynamoDB
+      MetricName: WriteThrottleEvents
+      Dimensions:
+        - Name: TableName
+          Value: !Ref MarginPulseTable
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+
+Outputs:
+  TableName:
+    Value: !Ref MarginPulseTable
+    Description: Set as DYNAMODB_TABLE_NAME in both the API and worker Lambda functions
+  TableArn:
+    Value: !GetAtt MarginPulseTable.Arn

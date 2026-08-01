@@ -1,0 +1,303 @@
+# ═══════════════════════════════════════════════════════════════════════════
+#  infra/worker-template.yaml — Go worker Lambda functions + SQS queues.
+#
+#  DEPLOY (after infra/dynamodb-table.yaml is already deployed):
+#    aws ecr create-repository --repository-name marginpulse-worker --region ap-south-1
+#    aws ecr get-login-password --region ap-south-1 | docker login --username AWS --password-stdin <account-id>.dkr.ecr.ap-south-1.amazonaws.com
+#    docker build -f cmd/worker/Dockerfile -t marginpulse-worker .
+#    docker tag marginpulse-worker:latest <account-id>.dkr.ecr.ap-south-1.amazonaws.com/marginpulse-worker:latest
+#    docker push <account-id>.dkr.ecr.ap-south-1.amazonaws.com/marginpulse-worker:latest
+#    sam build -t infra/worker-template.yaml
+#    sam deploy --guided -t infra/worker-template.yaml
+#
+#  All 5 queues trigger the SAME Go binary (cmd/worker's dispatch()
+#  function reads the "task" field from the message body and routes
+#  internally) — unlike the Python version, there's no per-queue
+#  ImageConfig.Command needed since Go's dispatch() already handles every
+#  task type in one function.
+# ═══════════════════════════════════════════════════════════════════════════
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: MarginPulse Pro (Go) — SQS-triggered worker Lambda
+
+Parameters:
+  ImageUri:
+    Type: String
+    Description: ECR image URI built from cmd/worker/Dockerfile
+  OCRServiceImageUri:
+    Type: String
+    Description: ECR image URI built from ocr-service/Dockerfile (RapidOCR Python Lambda)
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [staging, production]
+  DynamoDBTableName:
+    Type: String
+  RedisURL:
+    Type: String
+    NoEcho: true
+  FieldEncryptionKey:
+    Type: String
+    NoEcho: true
+  AnthropicApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+  AlarmNotificationEmail:
+    Type: String
+
+Globals:
+  Function:
+    PackageType: Image
+    MemorySize: 1024
+    Timeout: 90
+    Environment:
+      Variables:
+        APP_ENV: !Ref Environment
+        DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
+        AWS_REGION: !Ref AWS::Region
+        REDIS_URL: !Ref RedisURL
+        FIELD_ENCRYPTION_KEY: !Ref FieldEncryptionKey
+        ANTHROPIC_API_KEY: !Ref AnthropicApiKey
+
+Resources:
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub marginpulse-worker-go-alarms-${Environment}
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlarmNotificationEmail
+
+  OcrDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub marginpulse-ocr-dlq-${Environment}
+      MessageRetentionPeriod: 1209600
+  OcrQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub marginpulse-ocr-${Environment}
+      VisibilityTimeout: 120
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt OcrDLQ.Arn
+        maxReceiveCount: 3
+  OcrFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub marginpulse-worker-ocr-go-${Environment}
+      ImageUri: !Ref ImageUri
+      Environment:
+        Variables:
+          OCR_LAMBDA_FUNCTION_NAME: !Ref OcrServiceFunction
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref OcrServiceFunction
+      Events:
+        SqsTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt OcrQueue.Arn
+            BatchSize: 5
+            FunctionResponseTypes: [ReportBatchItemFailures]
+
+  # RapidOCR Python Lambda (ocr-service/) — invoked synchronously by
+  # OcrFunction above via AWS SDK Lambda.Invoke. Separate function/image
+  # so the Go worker never needs Python/ONNXRuntime in its own container.
+  OcrServiceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub marginpulse-ocr-service-${Environment}
+      ImageUri: !Ref OCRServiceImageUri
+      MemorySize: 1024 # ONNXRuntime inference needs more headroom than the Go functions
+      Timeout: 30
+  OcrDlqDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub marginpulse-ocr-go-dlq-depth-${Environment}
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{Name: QueueName, Value: !GetAtt OcrDLQ.QueueName}]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [!Ref AlarmTopic]
+
+  ReconcileDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub marginpulse-reconcile-dlq-${Environment}
+      MessageRetentionPeriod: 1209600
+  ReconcileQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub marginpulse-reconcile-${Environment}
+      VisibilityTimeout: 90
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ReconcileDLQ.Arn
+        maxReceiveCount: 3
+  ReconcileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub marginpulse-worker-reconcile-go-${Environment}
+      ImageUri: !Ref ImageUri
+      Timeout: 60
+      Events:
+        SqsTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt ReconcileQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes: [ReportBatchItemFailures]
+  ReconcileDlqDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub marginpulse-reconcile-go-dlq-depth-${Environment}
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{Name: QueueName, Value: !GetAtt ReconcileDLQ.QueueName}]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [!Ref AlarmTopic]
+
+  GstDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub marginpulse-gst-dlq-${Environment}
+      MessageRetentionPeriod: 1209600
+  GstQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub marginpulse-gst-${Environment}
+      VisibilityTimeout: 180
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt GstDLQ.Arn
+        maxReceiveCount: 3
+  GstFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub marginpulse-worker-gst-go-${Environment}
+      ImageUri: !Ref ImageUri
+      Timeout: 150
+      Events:
+        SqsTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt GstQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes: [ReportBatchItemFailures]
+  GstDlqDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub marginpulse-gst-go-dlq-depth-${Environment}
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{Name: QueueName, Value: !GetAtt GstDLQ.QueueName}]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [!Ref AlarmTopic]
+
+  TaxIdentifierDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub marginpulse-tax-identifier-dlq-${Environment}
+      MessageRetentionPeriod: 1209600
+  TaxIdentifierQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub marginpulse-tax-identifier-${Environment}
+      VisibilityTimeout: 60
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt TaxIdentifierDLQ.Arn
+        maxReceiveCount: 3
+  TaxIdentifierFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub marginpulse-worker-tax-identifier-go-${Environment}
+      ImageUri: !Ref ImageUri
+      MemorySize: 256
+      Timeout: 30
+      Events:
+        SqsTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt TaxIdentifierQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes: [ReportBatchItemFailures]
+  TaxIdentifierDlqDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub marginpulse-tax-identifier-go-dlq-depth-${Environment}
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{Name: QueueName, Value: !GetAtt TaxIdentifierDLQ.QueueName}]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [!Ref AlarmTopic]
+
+  BankAccountDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub marginpulse-bank-account-dlq-${Environment}
+      MessageRetentionPeriod: 1209600
+  BankAccountQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub marginpulse-bank-account-${Environment}
+      VisibilityTimeout: 60
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt BankAccountDLQ.Arn
+        maxReceiveCount: 3
+  BankAccountFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub marginpulse-worker-bank-account-go-${Environment}
+      ImageUri: !Ref ImageUri
+      MemorySize: 256
+      Timeout: 30
+      Events:
+        SqsTrigger:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt BankAccountQueue.Arn
+            BatchSize: 10
+            FunctionResponseTypes: [ReportBatchItemFailures]
+  BankAccountDlqDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub marginpulse-bank-account-go-dlq-depth-${Environment}
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{Name: QueueName, Value: !GetAtt BankAccountDLQ.QueueName}]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [!Ref AlarmTopic]
+
+Outputs:
+  OcrServiceFunctionName:
+    Value: !Ref OcrServiceFunction
+    Description: RapidOCR Python Lambda name — already wired into OcrFunction's env var above
+  OcrQueueUrl:
+    Value: !Ref OcrQueue
+  ReconcileQueueUrl:
+    Value: !Ref ReconcileQueue
+  GstQueueUrl:
+    Value: !Ref GstQueue
+  TaxIdentifierQueueUrl:
+    Value: !Ref TaxIdentifierQueue
+  BankAccountQueueUrl:
+    Value: !Ref BankAccountQueue
