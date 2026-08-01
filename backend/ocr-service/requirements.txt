@@ -1,0 +1,13 @@
+# rapidocr-onnxruntime bundles ONNXRuntime's CPU inference engine (pure
+# pip install, no system package manager needed — this is what avoids
+# the tesseract-on-al2023 compatibility problem entirely) plus small
+# pretrained detection/recognition/classification ONNX models
+# (~15-30MB combined, downloaded as part of the pip package itself).
+rapidocr-onnxruntime==1.3.24
+
+# pymupdf rasterizes PDF pages to PNG so RapidOCR (image-only) can read
+# them — pip-installable wheel with no system packages (poppler,
+# ghostscript) required, and no per-page cloud API cost. AGPL-3.0
+# licensed: free and open source, note the copyleft terms if this ever
+# gets redistributed as part of a larger proprietary bundle.
+pymupdf==1.24.9
