@@ -68,7 +68,17 @@ async function callAnthropic(env: Env, userMessage: string, maxTokens: number): 
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      // Sent alongside each other on purpose: Anthropic's own API reads
+      // x-api-key (and ignores the unused Authorization header);
+      // OpenRouter's Anthropic-compatible endpoint
+      // (https://openrouter.ai/api/v1/messages) requires Authorization:
+      // Bearer instead. This lets ANTHROPIC_API_BASE_URL/ANTHROPIC_API_KEY
+      // point at either provider with no other code change — for
+      // OpenRouter, set ANTHROPIC_API_BASE_URL="https://openrouter.ai/api"
+      // and ANTHROPIC_MODEL to OpenRouter's provider-prefixed model name
+      // (e.g. "anthropic/claude-sonnet-4.5"), not Anthropic's native one.
       "x-api-key": env.ANTHROPIC_API_KEY,
+      "Authorization": `Bearer ${env.ANTHROPIC_API_KEY}`,
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({

@@ -68,7 +68,14 @@ Every value in `wrangler.toml`'s secrets comment block, via
       password manager, not just in Cloudflare.**
 - [ ] `UPSTASH_REDIS_REST_TOKEN` — from your existing Upstash database
 - [ ] `ANTHROPIC_API_KEY` — for dashboard insights (optional: app
-      degrades to rule-based summaries without it)
+      degrades to rule-based summaries without it). Can be an
+      OpenRouter key instead — set `ANTHROPIC_API_BASE_URL` to
+      `https://openrouter.ai/api` and `ANTHROPIC_MODEL` to an
+      OpenRouter-style provider-prefixed name (e.g.
+      `anthropic/claude-sonnet-4.5`), not Anthropic's native model
+      name. `insights.ts` sends both `x-api-key` and
+      `Authorization: Bearer` on every call so either provider works
+      without further code changes.
 - [ ] `GST_API_CLIENT_ID` / `GST_API_CLIENT_SECRET` / `GST_API_USERNAME`
       — from your GST portal API provider (optional: identity/GST-sync
       routes degrade to PENDING without it)
