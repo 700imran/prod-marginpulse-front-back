@@ -9,14 +9,24 @@ import {
 } from "../repository/documents";
 import { appendAuditLog, listAuditLogForEntity } from "../repository/auditLog";
 import { createAnomaly } from "../repository/anomalies";
+import { processDocument, parseOcrLines } from "../pipelines/ocr";
+import { finalizeOcrResult } from "../queue/consumer";
 
 export const documentRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
 documentRoutes.use("*", requireAuth);
 
-// POST /documents/upload — mirrors HandleUpload. Enqueues onto
-// OCR_QUEUE instead of SQS; everything else (create PENDING row, store
-// the raw file first) is the same flow.
+// POST /documents/upload — mirrors HandleUpload, with one real
+// architecture change: OCR happens in the browser before this request
+// is even made (frontend/src/ocr/), and the extracted lines travel
+// alongside the file as the `ocr_lines` form field. This runs
+// processDocument() synchronously right here instead of enqueuing onto
+// OCR_QUEUE — there's no Lambda round trip to wait on anymore, just
+// regex extraction, so there's no reason to make this async. If
+// `ocr_lines` is missing/malformed (old client, unsupported browser,
+// tampered request), this still succeeds — the document just lands
+// with ocrAvailable: false for manual correction, same graceful
+// degradation as the WhatsApp/email ingestion paths in webhooks.ts.
 documentRoutes.post("/upload", async (c) => {
   const form = await c.req.formData();
   const file = form.get("file");
@@ -40,9 +50,12 @@ documentRoutes.post("/upload", async (c) => {
   await uploadBytes(c.env, storageKey, await file.arrayBuffer(), file.type);
   await sql`update documents set storage_key = ${storageKey} where document_id = ${doc.documentId}`;
 
-  await c.env.OCR_QUEUE.send({ task: "run_ocr_pipeline", job_id: crypto.randomUUID(), args: { tenant_id: tenant.tenantId, document_id: doc.documentId, storage_key: storageKey, mime_type: file.type } });
+  const lines = parseOcrLines(form.get("ocr_lines") as string | null);
+  const result = processDocument(lines ?? []);
+  await finalizeOcrResult(c.env, sql, tenant.tenantId, doc.documentId, result);
 
-  return c.json({ ...doc, storageKey }, 201);
+  const updatedDoc = await getDocumentById(sql, tenant.tenantId, doc.documentId);
+  return c.json({ ...(updatedDoc ?? doc), storageKey }, 201);
 });
 
 // GET /documents — mirrors HandleList's filters + pagination.

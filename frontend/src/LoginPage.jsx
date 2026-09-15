@@ -15,8 +15,7 @@
  */
 
 import { useState, useEffect } from "react";
-import { apiClient } from "./security/apiClient";
-import { tokenManager } from "./security/tokenManager";
+import { supabase } from "./supabaseClient";
 import { validateEmail, validatePassword, validateBusinessName, validateDisplayName, validatePhoneNumber } from "./security/inputValidator";
 import { ERROR_MESSAGES } from "./security/errorHandler";
 
@@ -537,31 +536,19 @@ function LoginForm({ onSuccess }) {
 
     setSubmitting(true);
 
-    // Call API with secure client
-    const response = await apiClient.post('/api/v1/auth/login', {
+    const { data, error } = await supabase.auth.signInWithPassword({
       email: form.email.trim().toLowerCase(),
       password: form.password,
     });
 
     setSubmitting(false);
 
-    if (!response.success) {
-      setApiError(response.userMessage || ERROR_MESSAGES.GENERIC_ERROR);
+    if (error || !data?.session) {
+      setApiError(error?.message || ERROR_MESSAGES.GENERIC_ERROR);
       return;
     }
 
-    const { data } = response;
-    if (data?.access_token && data?.refresh_token) {
-      tokenManager.setTokens(
-        data.access_token,
-        data.refresh_token,
-        data.tenant_id,
-        data.expires_in || 3600
-      );
-      onSuccess?.();
-    } else {
-      setApiError(ERROR_MESSAGES.GENERIC_ERROR);
-    }
+    onSuccess?.();
   };
 
   return (
@@ -699,29 +686,30 @@ function RegisterForm({ onSuccess }) {
 
     setSubmitting(true);
 
-    const response = await apiClient.post('/api/v1/auth/register', {
-      business_name: form.businessName.trim(),
+    const { data, error } = await supabase.auth.signUp({
       email: form.email.trim().toLowerCase(),
       password: form.password,
-      country_code: form.countryCode,
+      options: {
+        data: { business_name: form.businessName.trim(), country_code: form.countryCode },
+      },
     });
 
     setSubmitting(false);
 
-    if (!response.success) {
-      setApiError(response.userMessage || ERROR_MESSAGES.GENERIC_ERROR);
+    if (error) {
+      setApiError(error.message || ERROR_MESSAGES.GENERIC_ERROR);
       return;
     }
 
-    const { data } = response;
-    if (data?.access_token && data?.refresh_token) {
-      tokenManager.setTokens(
-        data.access_token,
-        data.refresh_token,
-        data.tenant_id,
-        data.expires_in || 3600
-      );
+    if (data?.session) {
+      // Email confirmation is off — the account is live immediately.
       onSuccess?.();
+    } else if (data?.user) {
+      // Email confirmation is on (Supabase Auth setting) — no session
+      // yet until the user clicks the confirmation link. Signing them
+      // in immediately isn't possible here; surface that plainly
+      // rather than pretending registration is complete.
+      setApiError("Check your email to confirm your account before signing in.");
     } else {
       setApiError(ERROR_MESSAGES.GENERIC_ERROR);
     }

@@ -251,11 +251,18 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
     const result = await uploadDocument(file, "INVOICE");
     setUploading(false);
     e.target.value = "";
-    if (result?.tracking_job_id) {
-      onToast?.("Document queued for processing", "success");
-      setTimeout(refresh, 3000);
+    // The Cloudflare backend returns the created document row directly
+    // (documentId) — OCR already ran client-side and finished before
+    // this response came back, so there's no async "queued" state to
+    // wait out anymore, unlike the old tracking_job_id flow.
+    if (result?.documentId) {
+      const message = result.ocrConfidenceScore != null
+        ? "Document uploaded and processed"
+        : "Document uploaded — no text detected, fill in details manually";
+      onToast?.(message, "success");
+      refresh();
     } else {
-      onToast?.(result?.detail || "Upload failed", "error");
+      onToast?.(result?.error || result?.detail || "Upload failed", "error");
     }
   }
 

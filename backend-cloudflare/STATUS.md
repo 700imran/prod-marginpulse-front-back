@@ -5,20 +5,38 @@ Workers, with Supabase (Auth + Postgres) replacing DynamoDB and custom
 JWT auth, and R2 replacing S3. This is a from-scratch TypeScript
 project — it does not touch the original Go code.
 
-**Independently re-verified in a follow-up pass** (not just trusting
-the claims above): `package.json`'s dependency list is `hono` +
-`postgres` + `jose` only — no `aws-sdk` anywhere, confirmed with a
-recursive grep for `aws-sdk|dynamodb|s3client|amazonaws` across `src/`
-and both package files (zero matches). `wrangler.toml` uses R2,
-Hyperdrive→Supabase Postgres, Cloudflare Queues, and Cron
-Triggers — no AWS resources. The **only** remaining AWS touchpoint in
-the entire codebase is `OCR_LAMBDA_URL`: one plain `fetch()` call with
-a bearer token in `src/pipelines/ocr.ts`, not the AWS SDK and not
-SigV4. That's the deliberate, documented exception below (RapidOCR/
-PyMuPDF can't run on Workers) — not an accidental AWS dependency. This
-codebase has no Vercel-related files because it's backend-only; the
-frontend (where a Vercel deploy target would live) isn't part of this
-handover zip — see "Not ported at all" below.
+**Update — the AWS Lambda OCR bridge described below has since been
+removed entirely.** This doc originally described `OCR_LAMBDA_URL` as
+a deliberate, permanent exception (RapidOCR/PyMuPDF can't run on
+Workers, so OCR stayed on AWS). That was true until there was no AWS
+account available for this deployment at all — OCR now runs entirely
+client-side in the browser instead (Shape Detection API / Tesseract.js
+— see `frontend/src/ocr/` and `frontend/STATUS.md`). `ocr.ts` now
+takes browser-supplied OCR lines directly; `OCR_LAMBDA_URL` and
+`OCR_LAMBDA_AUTH_TOKEN` no longer exist anywhere in this codebase.
+**This means there is now zero AWS dependency of any kind**, not "one
+deliberate exception" — independently re-verified the same way as
+below (grep across `src/`, both package files): zero matches for
+`aws-sdk|dynamodb|s3client|amazonaws|lambda` (case-insensitive) except
+in historical comments explaining what used to be there.
+
+One real trade-off from this change, stated plainly: **WhatsApp and
+email document ingestion now get no OCR at all** — there's no browser
+in those flows to run client-side extraction, so documents from those
+channels land pending for manual correction (`queue/consumer.ts`'s
+`runOCRPipeline` always resolves `ocrAvailable: false` for them now).
+That's a real product limitation of going fully client-side, not an
+oversight.
+
+**Independently re-verified in an earlier pass** (kept for the record,
+now superseded by the above): `package.json`'s dependency list was
+`hono` + `postgres` + `jose` only — no `aws-sdk` anywhere. `wrangler.toml`
+uses R2, Hyperdrive→Supabase Postgres, Cloudflare Queues, and Cron
+Triggers — no AWS resources. This codebase has no Vercel-related files
+because it's backend-only; the frontend now has its own `vercel.json`
+and `STATUS.md` covering that side (added in the same pass that
+removed the OCR Lambda). See "Not ported at all" below for what's
+still not wired up between the two.
 
 **Every file below was checked against the actual Go source in
 `marginpulse-handover-package.zip` before being written — not
@@ -58,9 +76,10 @@ compile in isolation:
 - **Pipelines** (verified line-by-line against source):
   `reconciliation.ts` (Levenshtein + weighted scoring), `identity.ts`
   (GSTIN/PAN/bank verification), `gstsync.ts` (GSTR-2B fetch +
-  cross-verify), `ocr.ts` (calls the kept-on-AWS Lambda + all regex
-  extraction), `insights.ts` (AI dashboard summary + collection
-  scripts), `missingInvoice.ts`, `dashboard.ts`
+  cross-verify), `ocr.ts` (processes browser-supplied OCR lines +
+  all regex extraction — no Lambda call anymore, see the update
+  note at the top of this doc), `insights.ts` (AI dashboard summary +
+  collection scripts), `missingInvoice.ts`, `dashboard.ts`
 - **Integrations**: Razorpay and Stripe connectors call the *real*
   Settlements/Payouts APIs — nothing mocked. Slack OAuth + incoming
   webhooks fully wired.
@@ -105,16 +124,16 @@ compile in isolation:
    STARTTLS upgrade, AUTH PLAIN) over it is real protocol work that
    wasn't attempted here rather than faked. Swap the provider in
    `src/email.ts` if you'd rather use Postmark/SendGrid/Mailgun.
-6. **OCR stays on AWS Lambda, reached over HTTPS via a Function URL**
-   instead of the SDK `Invoke` API — Workers have no AWS credentials to
-   sign a SigV4 request with. `RapidOCR` (native ONNX binary) and
-   `PyMuPDF` (C-extension wheel) categorically cannot run on Workers —
-   this is a platform ceiling, not an effort gap. **Confirmed earlier
-   in this conversation: OCR currently handles 100% of both PDF and
-   image volume** — the client-side OCR work referenced in earlier
-   session notes isn't in this repo or its own handover zip, so treat
-   the Lambda as load-bearing, not a rare exception path, until that
-   client-side work actually exists somewhere.
+6. **OCR was originally on AWS Lambda** (`RapidOCR`/`PyMuPDF`
+   categorically can't run on Workers — that part was a real platform
+   ceiling, not an effort gap), **but that Lambda bridge has since been
+   removed entirely** — see the update note at the top of this doc.
+   There was no AWS account available for this deployment, so OCR now
+   runs client-side in the browser instead
+   (`frontend/src/ocr/`), and `ocr.ts` here just processes whatever
+   lines the browser already extracted. This is a real, verified
+   change, not a plan — confirmed by `ocr.ts` having no Lambda call
+   left in it and a clean `npx tsc --noEmit` afterward.
 
 ## Known simplifications (flagged, not hidden)
 
@@ -177,8 +196,10 @@ touched real infrastructure):
    string (port 6543, not 5432).
 4. `wrangler secret put` every value listed in `wrangler.toml`'s
    comment block.
-5. Update the frontend for Supabase Auth — this is required, not
-   optional, before anything logs in successfully.
-6. Point `OCR_LAMBDA_URL` at a Function URL on the existing AWS OCR
-   Lambda (auth type NONE + the bearer token this code sends, or put
-   it behind API Gateway with a usage-plan key instead).
+5. Update the frontend for Supabase Auth and Vercel — **done** in the
+   same pass that removed the OCR Lambda (see `frontend/STATUS.md`),
+   though never yet run against a real Supabase project or a real
+   Vercel deploy.
+6. ~~Point `OCR_LAMBDA_URL` at a Function URL~~ — no longer
+   applicable. There's no Lambda to point at anymore; OCR runs
+   client-side (`frontend/src/ocr/`). Nothing to do here.

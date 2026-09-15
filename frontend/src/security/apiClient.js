@@ -17,6 +17,7 @@ import {
   ERROR_MESSAGES,
 } from './errorHandler';
 import { tokenManager } from './tokenManager';
+import { supabase } from '../supabaseClient';
 
 const BASE_URL = process.env.REACT_APP_API_URL || '';
 
@@ -209,33 +210,16 @@ class ApiClient {
   }
 
   /**
-   * Refresh tokens
+   * Refresh tokens — delegates to Supabase directly. The old
+   * /api/v1/auth/refresh endpoint this used to call doesn't exist on
+   * the Cloudflare backend; supabase-js already auto-refreshes in the
+   * background too, so this mostly matters as an explicit retry when a
+   * request hits a 401 before that background refresh has run.
    */
   async refreshTokens() {
     try {
-      const refreshToken = tokenManager.getRefreshToken();
-      if (!refreshToken) return false;
-
-      const response = await fetch(`${BASE_URL}/api/v1/auth/refresh`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ refresh_token: refreshToken }),
-      });
-
-      if (!response.ok) return false;
-
-      const data = await response.json();
-      if (data?.access_token && data?.refresh_token) {
-        tokenManager.setTokens(
-          data.access_token,
-          data.refresh_token,
-          data.tenant_id,
-          data.expires_in || 3600
-        );
-        return true;
-      }
-
-      return false;
+      const { data, error } = await supabase.auth.refreshSession();
+      return !error && !!data?.session;
     } catch (e) {
       console.error('[ApiClient] Token refresh failed', e);
       return false;

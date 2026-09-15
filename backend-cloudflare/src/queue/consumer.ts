@@ -6,8 +6,7 @@
 // "retry this message", same as returning an error did in Go.
 import type { Env } from "../config";
 import { getDb } from "../db";
-import { downloadBytes } from "../storage";
-import { processDocument } from "../pipelines/ocr";
+import { processDocument, type OCRResult } from "../pipelines/ocr";
 import { reconcileBatch, type Invoice, type BankRow } from "../pipelines/reconciliation";
 import { fetchGSTR2B, parseGSTR2BSuppliers, crossVerifyVendors, type InternalVendor } from "../pipelines/gstsync";
 import { verifyGSTIN, verifyPAN, verifyBankAccount } from "../pipelines/identity";
@@ -29,37 +28,48 @@ function argStr(args: Record<string, any>, key: string): string {
   return typeof args[key] === "string" ? args[key] : "";
 }
 
+// Shared by both the queue-driven path below (WhatsApp/email ingestion
+// — no browser involved, always called with ocrAvailable: false) and
+// the web-upload path (routes/documents.ts), which calls this directly
+// instead of round-tripping through OCR_QUEUE, since browser-side OCR
+// already ran before the file was even uploaded.
+export async function finalizeOcrResult(env: Env, sql: ReturnType<typeof getDb>, tenantId: string, documentId: string, result: OCRResult): Promise<void> {
+  const updated = await updateDocumentFields(sql, tenantId, documentId, {
+    processingStatus: result.ocrAvailable ? "PARSED" : "PENDING",
+    vendorName: result.vendorName || undefined,
+    documentDate: result.documentDate || undefined,
+    rawTotalAmount: result.rawTotalAmount || undefined,
+    taxAmount: result.taxAmount || undefined,
+    taxIdentifier: result.taxIdentifier || undefined,
+    invoiceNumber: result.invoiceNumber || undefined,
+    ocrConfidenceScore: result.confidence,
+    ocrErrorMessage: result.ocrAvailable ? undefined : "No OCR data available for this document — enter details manually",
+  });
+  console.log("ocr_pipeline_completed", { documentId, ocrAvailable: result.ocrAvailable });
+
+  await checkForDuplicateInvoice(sql, tenantId, documentId, updated.vendorName, updated.invoiceNumber, result.rawTotalAmount, result.documentDate);
+
+  // Chain directly into reconciliation within the same invocation,
+  // same rationale as the Go original: cheaper than a second queue
+  // round trip. runReconciliation already no-ops cleanly when
+  // amount/date are missing (ocrAvailable: false case), so this is
+  // safe to call unconditionally.
+  await runReconciliation(env, sql, { document_id: documentId, tenant_id: tenantId });
+}
+
+// WhatsApp/email ingestion (routes/webhooks.ts) still enqueues this —
+// there's no browser in that flow to run client-side OCR, so this
+// always resolves to ocrAvailable: false. See pipelines/ocr.ts's
+// header comment for why there's no server-side OCR fallback for
+// these channels rather than silently dropping the task.
 async function runOCRPipeline(env: Env, args: Record<string, any>): Promise<void> {
   const documentId = argStr(args, "document_id");
-  const storageKey = argStr(args, "storage_key");
-  const mimeType = argStr(args, "mime_type");
   const tenantId = argStr(args, "tenant_id");
-
-  const data = await downloadBytes(env, storageKey);
-  if (!data) throw new Error(`document bytes missing from R2 for key ${storageKey}`);
-  const result = await processDocument(env, data, mimeType);
+  const result = processDocument([]);
 
   const sql = getDb(env);
   try {
-    const updated = await updateDocumentFields(sql, tenantId, documentId, {
-      processingStatus: "PARSED",
-      vendorName: result.vendorName || undefined,
-      documentDate: result.documentDate || undefined,
-      rawTotalAmount: result.rawTotalAmount || undefined,
-      taxAmount: result.taxAmount || undefined,
-      taxIdentifier: result.taxIdentifier || undefined,
-      invoiceNumber: result.invoiceNumber || undefined,
-      ocrConfidenceScore: result.confidence,
-    });
-    console.log("ocr_pipeline_completed", { documentId });
-
-    await checkForDuplicateInvoice(sql, tenantId, documentId, updated.vendorName, updated.invoiceNumber, result.rawTotalAmount, result.documentDate);
-
-    // Chain directly into reconciliation within the same invocation,
-    // same rationale as the Go original: cheaper than a second queue
-    // round trip, and OCR re-running on a retry is idempotent since it
-    // re-reads from R2.
-    await runReconciliation(env, sql, { document_id: documentId, tenant_id: tenantId });
+    await finalizeOcrResult(env, sql, tenantId, documentId, result);
   } finally {
     await sql.end();
   }

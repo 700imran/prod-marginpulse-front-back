@@ -89,7 +89,7 @@ crons = ["0 3 * * *"]  # daily: detect-missing-invoices sweep across tenants
 #   SUPABASE_JWT_SECRET, SUPABASE_SERVICE_ROLE_KEY, FIELD_ENCRYPTION_KEY,
 #   UPSTASH_REDIS_REST_TOKEN, ANTHROPIC_API_KEY, GST_API_KEY,
 #   RAZORPAY_KEY_SECRET, STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET,
-#   SLACK_CLIENT_SECRET, OCR_LAMBDA_AUTH_TOKEN, RESEND_API_KEY,
+#   SLACK_CLIENT_SECRET, RESEND_API_KEY,
 #   WHATSAPP_VERIFY_TOKEN, WHATSAPP_ACCESS_TOKEN, WHATSAPP_APP_SECRET,
 #   WEBHOOK_INGEST_SECRET
 # ---------------------------------------------------------------------------
@@ -97,7 +97,6 @@ crons = ["0 3 * * *"]  # daily: detect-missing-invoices sweep across tenants
 ENVIRONMENT = "production"
 SUPABASE_URL = "https://REPLACE.supabase.co"
 UPSTASH_REDIS_REST_URL = "https://REPLACE.upstash.io"
-OCR_LAMBDA_URL = "https://REPLACE.lambda-url.ap-south-1.on.aws/"
 GST_API_BASE_URL = "https://REPLACE-gst-portal-provider.example.com"
 ANTHROPIC_API_BASE_URL = "https://api.anthropic.com"
 ANTHROPIC_MODEL = "claude-sonnet-4-20250514"

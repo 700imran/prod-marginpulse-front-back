@@ -287,8 +287,13 @@ create table if not exists public.integrations (
 create or replace function public.handle_new_auth_user()
 returns trigger as $$
 begin
-  insert into public.tenants (tenant_id, business_name, owner_email)
-  values (new.id, coalesce(new.raw_user_meta_data->>'business_name', split_part(new.email, '@', 1)), new.email)
+  insert into public.tenants (tenant_id, business_name, owner_email, country_code)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'business_name', split_part(new.email, '@', 1)),
+    new.email,
+    coalesce(new.raw_user_meta_data->>'country_code', 'IN')
+  )
   on conflict (tenant_id) do nothing;
   return new;
 end;

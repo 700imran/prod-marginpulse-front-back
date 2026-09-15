@@ -16,7 +16,6 @@ export interface Env {
   ENVIRONMENT: string;
   SUPABASE_URL: string;
   UPSTASH_REDIS_REST_URL: string;
-  OCR_LAMBDA_URL: string;
   GST_API_BASE_URL: string;
   ANTHROPIC_API_BASE_URL: string;
   ANTHROPIC_MODEL: string;             // config.go default: "claude-sonnet-4-20250514" — check this is still a live model string before deploying
@@ -42,7 +41,6 @@ export interface Env {
   STRIPE_WEBHOOK_SECRET: string;
   SLACK_CLIENT_ID: string;
   SLACK_CLIENT_SECRET: string;
-  OCR_LAMBDA_AUTH_TOKEN: string;      // shared secret / SigV4 alternative for calling the kept-on-AWS OCR Lambda
   RESEND_API_KEY: string;             // see src/email.ts — provider swap from the Go original's raw SMTP
   WHATSAPP_VERIFY_TOKEN: string;
   WHATSAPP_ACCESS_TOKEN: string;

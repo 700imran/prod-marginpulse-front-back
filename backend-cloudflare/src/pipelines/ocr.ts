@@ -1,17 +1,21 @@
-// Port of internal/pipelines/ocr/ocr.go. The one deliberate architecture
-// change: the Go version called AWS Lambda's Invoke API (SDK, SigV4);
-// this calls the same Lambda via a Function URL instead (plain HTTPS +
-// a bearer token) since a Worker has no AWS SigV4 credentials to sign
-// with. Set OCR_LAMBDA_AUTH_TOKEN to match whatever auth the Function
-// URL is configured with (IAM auth needs SigV4 and won't work from
-// here — use Function URL auth type NONE plus this bearer token
-// checked inside the Lambda itself, or put the Function URL behind
-// API Gateway with a usage-plan API key instead).
+// Port of internal/pipelines/ocr/ocr.go's field-extraction half.
 //
-// Everything downstream of getting raw OCR text back — all of the
-// regex-based field extraction — is an exact, unchanged port: same
-// patterns, same order, same fallbacks.
-import type { Env } from "../config";
+// The Lambda-calling half (invokeOCRLambda, arrayBufferToBase64) has
+// been REMOVED — this used to call an AWS Lambda Function URL to turn
+// a file into raw OCR text, but that requires an AWS account, which
+// this deployment deliberately doesn't have. OCR now runs entirely in
+// the browser instead (Shape Detection API / Tesseract.js — see
+// frontend/src/ocr/), and the browser sends already-extracted lines
+// here instead of raw file bytes. There is no server-side OCR fallback
+// of any kind: if the browser couldn't produce lines (unsupported
+// browser, or WhatsApp/email ingestion where there's no browser in the
+// loop at all), the document lands with ocrAvailable: false and empty
+// fields for manual correction via the existing correction workflow.
+//
+// Everything below — all the regex-based field extraction — is still
+// an exact, unchanged port: same patterns, same order, same fallbacks.
+// It now runs against whatever lines it's given instead of lines
+// fetched from a Lambda.
 
 export interface OCRResult {
   ocrAvailable: boolean;
@@ -23,6 +27,11 @@ export interface OCRResult {
   invoiceNumber: string;
   rawText: string;
   confidence: number;
+}
+
+export interface OcrLine {
+  text: string;
+  confidence: number; // 0-1 scale — matches ocr_confidence_threshold in settings (db/schema.sql)
 }
 
 const AMOUNT_PATTERNS = [
@@ -37,24 +46,6 @@ const TAX_PATTERN = /(?:cgst|sgst|igst|gst|tax)[^\d]*([\d,]+\.?\d*)/i;
 const INVOICE_PATTERN = /(?:invoice|inv)[^\w]*([\w/-]+)/i;
 const INVOICE_HEADER_RE = /invoice|receipt|bill|tax\s*invoice/i;
 const STARTS_WITH_DIGIT = /^\d/;
-
-interface OcrLambdaResponse {
-  lines: { text: string; confidence: number }[];
-  error?: string;
-}
-
-async function invokeOCRLambda(env: Env, fileBytes: ArrayBuffer, mimeType: string): Promise<OcrLambdaResponse> {
-  const fileBase64 = arrayBufferToBase64(fileBytes);
-  const resp = await fetch(env.OCR_LAMBDA_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${env.OCR_LAMBDA_AUTH_TOKEN}` },
-    body: JSON.stringify({ file_base64: fileBase64, mime_type: mimeType }),
-  });
-  if (!resp.ok) throw new Error(`OCR Lambda invocation failed: HTTP ${resp.status}`);
-  const out = (await resp.json()) as OcrLambdaResponse;
-  if (out.error) throw new Error(`OCR processing failed: ${out.error}`);
-  return out;
-}
 
 function extractAmount(text: string): number | null {
   for (const pat of AMOUNT_PATTERNS) {
@@ -100,16 +91,23 @@ function roundTo4(f: number): number {
   return Math.round(f * 10000) / 10000;
 }
 
-export async function processDocument(env: Env, fileBytes: ArrayBuffer, mimeType: string): Promise<OCRResult> {
-  const resp = await invokeOCRLambda(env, fileBytes, mimeType);
+// lines=[] (unsupported browser, or an ingestion channel with no
+// browser at all — WhatsApp/email) is a valid, expected input, not an
+// error: it produces an explicit "OCR didn't run" result rather than
+// throwing, so callers always get something to persist and the
+// document surfaces cleanly for manual correction.
+export function processDocument(lines: OcrLine[]): OCRResult {
+  if (lines.length === 0) {
+    return { ocrAvailable: false, vendorName: "", documentDate: "", rawTotalAmount: 0, taxAmount: 0, taxIdentifier: "", invoiceNumber: "", rawText: "", confidence: 0 };
+  }
 
   let rawText = "";
   let confidenceSum = 0;
-  for (const line of resp.lines) {
+  for (const line of lines) {
     rawText += line.text + "\n";
     confidenceSum += line.confidence;
   }
-  const avgConfidence = resp.lines.length > 0 ? confidenceSum / resp.lines.length : 0;
+  const avgConfidence = confidenceSum / lines.length;
 
   const totalAmount = extractAmount(rawText) ?? 0;
   const gstin = extractGSTIN(rawText);
@@ -140,12 +138,31 @@ export async function processDocument(env: Env, fileBytes: ArrayBuffer, mimeType
   };
 }
 
-function arrayBufferToBase64(buf: ArrayBuffer): string {
-  const bytes = new Uint8Array(buf);
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+// Parses and sanity-checks the `ocr_lines` form field the browser
+// sends alongside the file upload. Returns null (never throws) on
+// anything malformed, so a bad/tampered payload degrades to "no OCR"
+// rather than a 500 or a crash — same posture as an empty lines array.
+export function parseOcrLines(raw: string | null | undefined): OcrLine[] | null {
+  if (!raw) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
   }
-  return btoa(binary);
+  if (!Array.isArray(parsed)) return null;
+  const lines: OcrLine[] = [];
+  for (const item of parsed) {
+    if (
+      typeof item === "object" && item !== null &&
+      typeof (item as Record<string, unknown>).text === "string" &&
+      typeof (item as Record<string, unknown>).confidence === "number"
+    ) {
+      const text = (item as { text: string }).text.slice(0, 2000);
+      const confidence = Math.max(0, Math.min(1, (item as { confidence: number }).confidence));
+      if (text.trim() !== "") lines.push({ text, confidence });
+    }
+    if (lines.length >= 500) break; // sane upper bound, mirrors the 15MB file-size cap's spirit
+  }
+  return lines.length > 0 ? lines : null;
 }

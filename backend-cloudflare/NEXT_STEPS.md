@@ -80,8 +80,6 @@ Every value in `wrangler.toml`'s secrets comment block, via
       need `slack_client_id`/`slack_redirect_uri` set via
       `PATCH /api/v1/admin/settings` once deployed, since those live
       in the `platform_settings` table, not a wrangler secret)
-- [ ] `OCR_LAMBDA_AUTH_TOKEN` — a random string you invent now, used
-      again in Phase D
 - [ ] `RESEND_API_KEY` (or swap providers in `src/email.ts` first)
 - [ ] `WHATSAPP_VERIFY_TOKEN` / `WHATSAPP_ACCESS_TOKEN` (optional,
       only if using WhatsApp ingestion)
@@ -93,25 +91,22 @@ Every value in `wrangler.toml`'s secrets comment block, via
 
 Then update the plain (non-secret) values directly in `wrangler.toml`'s
 `[vars]` block: `SUPABASE_URL`, `UPSTASH_REDIS_REST_URL`,
-`OCR_LAMBDA_URL`, `GST_API_BASE_URL`, `FRONTEND_ORIGIN`,
-`INGEST_EMAIL_ADDRESS`.
+`GST_API_BASE_URL`, `FRONTEND_ORIGIN`, `INGEST_EMAIL_ADDRESS`.
 
-## Phase D — Bridge to the existing OCR Lambda
+## Phase D — ~~Bridge to the existing OCR Lambda~~ (removed — OCR is client-side now)
 
-The RapidOCR/PyMuPDF Lambda stays on AWS (see `STATUS.md` for why) —
-Workers reaches it over plain HTTPS instead of the SDK Invoke API.
+There is no OCR Lambda anymore, and nothing to bridge to. OCR runs
+entirely in the browser (`frontend/src/ocr/` — Shape Detection API
+primary, Tesseract.js WASM fallback, `pdfjs-dist` for PDF
+rasterization) because there was no AWS account available for this
+deployment. `OCR_LAMBDA_URL` and `OCR_LAMBDA_AUTH_TOKEN` no longer
+exist in `config.ts` or `wrangler.toml` — skip this phase entirely.
 
-- [ ] On the existing OCR Lambda: enable a **Function URL**, auth type
-      `NONE`.
-- [ ] Inside the Lambda handler, check for a header
-      `Authorization: Bearer <OCR_LAMBDA_AUTH_TOKEN>` matching the
-      value you invented in Phase C, and reject anything else with
-      401. (This replaces IAM-based auth, which Workers can't do
-      without AWS credentials to sign with.)
-- [ ] Set `OCR_LAMBDA_URL` in `wrangler.toml` to the Function URL.
-- [ ] Test it directly with `curl` before wiring the Worker to it —
-      confirm it accepts `{file_base64, mime_type}` and returns
-      `{lines: [{text, confidence}]}`.
+One thing worth doing that isn't done yet: **test the client-side OCR
+against real scanned/photographed invoices**, not just confirm the
+frontend build compiles. Tesseract.js/TextDetector's real-world
+accuracy on messy documents hasn't been checked — see
+`frontend/STATUS.md`'s known gaps.
 
 ## Phase E — Local verification
 
@@ -162,12 +157,14 @@ old REST auth flow. Concretely:
 
 - [ ] Point production DNS / the real frontend's API URL at the
       Workers deployment.
-- [ ] Keep the AWS stack (API Gateway, Lambda, DynamoDB, SQS) running
-      but idle for a rollback window — don't tear it down same-day.
+- [ ] Keep the old AWS stack (API Gateway, Lambda, DynamoDB, SQS)
+      running but idle for a rollback window — don't tear it down
+      same-day.
 - [ ] Once confident: decommission API Gateway, the `api`/`worker`
-      Lambdas, DynamoDB, and SQS. **Leave the OCR Lambda running** —
-      it's staying permanently per the architecture decision in
-      `STATUS.md`.
+      Lambdas, DynamoDB, and SQS — **including the OCR Lambda**. It's
+      no longer used at all (OCR is client-side now, see `STATUS.md`'s
+      update note) — there's no "leave it running permanently"
+      exception anymore.
 
 ---
 

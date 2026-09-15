@@ -1,22 +1,26 @@
 /**
  * api.js — Centralised API client for MarginPulse Pro frontend.
- * All fetch calls go through here. Token is stored in localStorage.
+ * All fetch calls go through here. Auth token comes from Supabase's
+ * session (via tokenManager, which wraps supabase-js) — not raw
+ * localStorage reads under this app's own keys, since Supabase
+ * persists its session under its own key. See supabaseClient.js and
+ * security/tokenManager.js.
  *
- * DEPLOYMENT NOTE (multi-repo split): this frontend deploys as a
- * standalone static site (e.g. Cloudflare Pages) with no reverse proxy
- * in front of it — there is no nginx container co-located with this
- * build anymore. REACT_APP_API_URL MUST be set to the real, public URL
- * of the deployed backend-api service (e.g.
- * https://marginpulse-api.onrender.com) in your hosting platform's
- * build-time environment variables. Create React App bakes
- * process.env.REACT_APP_* values into the JS bundle AT BUILD TIME, not
- * at runtime — so this must be set before the build step runs, and
- * changing it requires a rebuild, not just a container restart.
+ * DEPLOYMENT NOTE: this frontend deploys as a standalone static site
+ * on Vercel — REACT_APP_API_URL, REACT_APP_SUPABASE_URL, and
+ * REACT_APP_SUPABASE_ANON_KEY MUST be set as build-time environment
+ * variables there (Create React App bakes process.env.REACT_APP_*
+ * into the bundle AT BUILD TIME, not at runtime — changing them
+ * requires a rebuild, not just a redeploy of the same build).
  */
+import { supabase } from './supabaseClient';
+import { tokenManager } from './security/tokenManager';
+import { getOcrLines } from './ocr';
+
 const BASE = process.env.REACT_APP_API_URL || '';
 
 function getToken() {
-  return localStorage.getItem('mp_access_token') || '';
+  return tokenManager.getAccessToken();
 }
 
 function authHeaders() {
@@ -34,85 +38,35 @@ async function request(method, path, body) {
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   if (res.status === 401) {
-    // Try refresh
-    const refreshed = await refreshToken();
-    if (!refreshed) {
-      localStorage.removeItem('mp_access_token');
-      localStorage.removeItem('mp_refresh_token');
+    // Try Supabase's own refresh (it also auto-refreshes in the
+    // background, but this covers the case where a request landed
+    // just before that had a chance to run).
+    const { data, error } = await supabase.auth.refreshSession();
+    if (error || !data?.session) {
+      tokenManager.clearTokens();
       window.location.href = '/';
       return null;
     }
-    // Retry original request with new token
+    // Retry original request with the refreshed token
     return request(method, path, body);
   }
   return res.json();
 }
 
-async function refreshToken() {
-  const rt = localStorage.getItem('mp_refresh_token');
-  if (!rt) return false;
-  try {
-    const res = await fetch(`${BASE}/api/v1/auth/refresh`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: rt }),
-    });
-    if (!res.ok) return false;
-    const data = await res.json();
-    localStorage.setItem('mp_access_token', data.access_token);
-    localStorage.setItem('mp_refresh_token', data.refresh_token);
-    return true;
-  } catch { return false; }
-}
-
 // ── Auth ──────────────────────────────────────────────────────────────────────
-export async function register(businessName, email, password, countryCode = 'IND') {
-  const data = await request('POST', '/api/v1/auth/register', {
-    business_name: businessName, email, password, country_code: countryCode,
-  });
-  if (data?.access_token) {
-    localStorage.setItem('mp_access_token', data.access_token);
-    localStorage.setItem('mp_refresh_token', data.refresh_token);
-    localStorage.setItem('mp_tenant_id', data.tenant_id);
-  }
-  return data;
-}
+// Sign-in/sign-up themselves live in LoginPage.jsx, calling Supabase
+// directly (supabase.auth.signInWithPassword / signUp) — there's no
+// /api/v1/auth/login or /register endpoint on this backend anymore for
+// this module to wrap. This file keeps only the two things the rest of
+// the app actually calls on api.* : logout and an auth-state check.
 
-export async function login(email, password) {
-  const data = await request('POST', '/api/v1/auth/login', { email, password });
-  if (data?.access_token) {
-    localStorage.setItem('mp_access_token', data.access_token);
-    localStorage.setItem('mp_refresh_token', data.refresh_token);
-    localStorage.setItem('mp_tenant_id', data.tenant_id);
-  }
-  return data;
-}
-
-export async function logout() {
-  // FIX: this previously only cleared localStorage — the token itself
-  // stayed valid server-side until natural expiry. Now calls the real
-  // /auth/logout endpoint first, which revokes both tokens via Redis,
-  // then clears local state regardless of whether the network call
-  // succeeds (so a flaky connection never traps the user in a logged-in
-  // UI state with no way out).
-  const rt = localStorage.getItem('mp_refresh_token');
-  try {
-    await fetch(`${BASE}/api/v1/auth/logout`, {
-      method: 'POST',
-      headers: authHeaders(),
-      body: JSON.stringify({ refresh_token: rt || null }),
-    });
-  } catch {
-    // Network failure during logout shouldn't block the user from
-    // leaving the app locally — server-side tokens will still expire
-    // naturally even if this particular revoke call didn't land.
-  }
-  localStorage.clear();
+export function logout() {
+  tokenManager.clearTokens();
   window.location.href = '/';
 }
 
 export function isLoggedIn() {
-  return !!localStorage.getItem('mp_access_token');
+  return tokenManager.isAuthenticated();
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -128,10 +82,25 @@ export async function listDocuments(status, docType) {
   return request('GET', `/api/v1/documents?${params}`);
 }
 
+// OCR runs client-side before the file ever reaches the network — see
+// ocr/index.js for why (no AWS account for a server-side OCR Lambda).
+// This is always best-effort: any OCR failure just means the document
+// uploads without extracted fields (ocrAvailable: false server-side),
+// never blocks the upload itself.
 export async function uploadDocument(file, docType = 'INVOICE') {
   const form = new FormData();
   form.append('file', file);
   form.append('doc_type', docType);
+
+  try {
+    const ocrResult = await getOcrLines(file);
+    if (ocrResult?.lines?.length) {
+      form.append('ocr_lines', JSON.stringify(ocrResult.lines));
+    }
+  } catch (e) {
+    console.warn('[uploadDocument] client-side OCR failed, uploading without extracted fields', e);
+  }
+
   const res = await fetch(`${BASE}/api/v1/documents/upload`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${getToken()}` },
