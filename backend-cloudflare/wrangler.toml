@@ -1,4 +1,4 @@
-name = "marginpulse-api"
+name = "prod-marginpulse-front-back"
 main = "src/index.ts"
 compatibility_date = "2025-01-09"
 compatibility_flags = ["nodejs_compat"]
@@ -21,62 +21,62 @@ bucket_name = "marginpulse-documents"
 # ---------------------------------------------------------------------------
 [[hyperdrive]]
 binding = "HYPERDRIVE"
-id = "REPLACE_WITH_HYPERDRIVE_ID"
+id = "64389ddcbe7f4f19b4688b29d540e48f"
 
 # ---------------------------------------------------------------------------
 # Queues — replace the 5 SQS queues in infra/worker-template.yaml 1:1
 # ---------------------------------------------------------------------------
 [[queues.producers]]
 binding = "OCR_QUEUE"
-queue = "marginpulse-ocr"
+queue = "ocr-queue"
 
 [[queues.producers]]
 binding = "RECONCILE_QUEUE"
-queue = "marginpulse-reconcile"
+queue = "reconcile-queue"
 
 [[queues.producers]]
 binding = "GST_QUEUE"
-queue = "marginpulse-gst"
+queue = "gst-queue"
 
 [[queues.producers]]
 binding = "TAX_IDENTIFIER_QUEUE"
-queue = "marginpulse-tax-identifier"
+queue = "tax-identifier-queue"
 
 [[queues.producers]]
 binding = "BANK_ACCOUNT_QUEUE"
-queue = "marginpulse-bank-account"
+queue = "bank-account-queue"
 
-# One consumer Worker drains all 5 — src/queue/consumer.ts dispatches on
-# the "task" field, same as cmd/worker/main.go's switch did.
+
 [[queues.consumers]]
-queue = "marginpulse-ocr"
+queue = "ocr-queue"
 max_batch_size = 1
 max_retries = 3
-dead_letter_queue = "marginpulse-ocr-dlq"
+dead_letter_queue = "ocr-queue-dlq"
 
 [[queues.consumers]]
-queue = "marginpulse-reconcile"
+queue = "reconcile-queue"
 max_batch_size = 5
 max_retries = 3
-dead_letter_queue = "marginpulse-reconcile-dlq"
+dead_letter_queue = "reconcile-queue-dlq"
 
 [[queues.consumers]]
-queue = "marginpulse-gst"
+queue = "gst-queue"
 max_batch_size = 1
 max_retries = 2
-dead_letter_queue = "marginpulse-gst-dlq"
+dead_letter_queue = "gst-queue-dlq"
 
 [[queues.consumers]]
-queue = "marginpulse-tax-identifier"
+queue = "tax-identifier-queue"
 max_batch_size = 5
 max_retries = 3
-dead_letter_queue = "marginpulse-tax-identifier-dlq"
+dead_letter_queue = "tax-identifier-queue-dlq"
 
 [[queues.consumers]]
-queue = "marginpulse-bank-account"
+queue = "bank-account-queue"
 max_batch_size = 5
 max_retries = 3
-dead_letter_queue = "marginpulse-bank-account-dlq"
+dead_letter_queue = "bank-account-queue-dlq"
+
 
 # ---------------------------------------------------------------------------
 # Cron Triggers — replaces the never-built EventBridge rules from ROADMAP.md
