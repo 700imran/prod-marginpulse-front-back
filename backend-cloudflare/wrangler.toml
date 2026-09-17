@@ -95,7 +95,7 @@ crons = ["0 3 * * *"]  # daily: detect-missing-invoices sweep across tenants
 # ---------------------------------------------------------------------------
 [vars]
 ENVIRONMENT = "production"
-SUPABASE_URL = "https://REPLACE.supabase.co"
+SUPABASE_URL = "https://nseurvhbqkdlemcfoixt.supabase.co"
 UPSTASH_REDIS_REST_URL = "https://REPLACE.upstash.io"
 GST_API_BASE_URL = "https://REPLACE-gst-portal-provider.example.com"
 ANTHROPIC_API_BASE_URL = "https://api.anthropic.com"
@@ -103,7 +103,7 @@ ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
 LLM_MAX_TOKENS = "1024"
 AI_MAX_PROMPT_TOKENS = "8000"
 AI_MAX_COMPLETION_TOKENS = "2000"
-FRONTEND_ORIGIN = "https://app.marginpulse.example.com"
+FRONTEND_ORIGIN = "https://marginpulse-app.vercel.app"
 INGEST_EMAIL_ADDRESS = "noreply@marginpulse.example.com"
 WHATSAPP_API_VERSION = "v19.0"
 AI_INSIGHTS_DAILY_BUDGET_USD = "5.00"

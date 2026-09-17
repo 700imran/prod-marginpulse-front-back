@@ -454,29 +454,59 @@ function AuthInput({
 }
 
 /**
- * "Continue with Google/Apple" buttons — plain full-page redirects to
- * the backend's OAuth login endpoints (internal/httpapi/oauth_handlers.go),
- * not fetch() calls, since an OAuth authorization flow inherently needs
- * a real browser navigation to the provider's consent screen.
+ * "Continue with Google/Apple" buttons — call Supabase Auth's own OAuth
+ * flow directly (supabase.auth.signInWithOAuth), the same way
+ * signInWithPassword/signUp already work in this file. The old
+ * `${API_BASE}/api/v1/auth/google|apple/login` redirects this used to
+ * point at were leftover Go-backend routes that don't exist on the
+ * Cloudflare Worker — clicking them 404'd. Requires the Google/Apple
+ * providers to be enabled under Supabase Dashboard → Authentication →
+ * Providers, and this app's origin listed under Authentication → URL
+ * Configuration → Redirect URLs.
  */
 function OAuthButtons() {
+  const [oauthLoading, setOauthLoading] = useState(null); // "google" | "apple" | null
+
+  async function handleOAuth(provider) {
+    setOauthLoading(provider);
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: { redirectTo: window.location.origin },
+    });
+    // If this returns at all, the redirect to the provider never happened.
+    if (error) {
+      setOauthLoading(null);
+      window.location.search = `?oauth_error=${encodeURIComponent(error.message)}`;
+    }
+  }
+
   return (
     <div className="mp-auth-oauth-row">
-      <a className="mp-auth-oauth-btn" href={`${API_BASE}/api/v1/auth/google/login`}>
+      <button
+        type="button"
+        className="mp-auth-oauth-btn"
+        onClick={() => handleOAuth("google")}
+        disabled={oauthLoading !== null}
+      >
         <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
           <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.9 32.9 29.4 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l6-6C34.5 5.1 29.5 3 24 3 12.4 3 3 12.4 3 24s9.4 21 21 21 21-9.4 21-21c0-1.4-.1-2.7-.4-3.5z"/>
           <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.9 18.9 13 24 13c3.1 0 5.8 1.1 8 3l6-6C34.5 5.1 29.5 3 24 3 16.3 3 9.7 7.3 6.3 14.7z"/>
           <path fill="#4CAF50" d="M24 45c5.3 0 10.2-2 13.9-5.4l-6.4-5.4C29.4 35.9 26.8 37 24 37c-5.3 0-9.8-3.4-11.4-8.1l-6.5 5C9.6 40.6 16.2 45 24 45z"/>
           <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.9 2.5-2.5 4.6-4.6 6.1l6.4 5.4C40.8 36.9 44 31.4 44 24c0-1.4-.1-2.7-.4-3.5z"/>
         </svg>
-        Continue with Google
-      </a>
-      <a className="mp-auth-oauth-btn" href={`${API_BASE}/api/v1/auth/apple/login`}>
+        {oauthLoading === "google" ? "Redirecting…" : "Continue with Google"}
+      </button>
+      <button
+        type="button"
+        className="mp-auth-oauth-btn"
+        onClick={() => handleOAuth("apple")}
+        disabled={oauthLoading !== null}
+      >
         <svg width="15" height="15" viewBox="0 0 384 512" aria-hidden="true" fill="#000">
           <path d="M318.7 268.7c-.2-36.7 16.4-64.4 50-84.8-18.8-26.9-47.2-41.7-84.7-44.6-35.5-2.8-74.3 20.7-88.5 20.7-15 0-49.4-19.7-76.4-19.7C63.3 141 4 184.8 4 273.5c0 26.2 4.8 53.3 14.4 81.2 12.8 37.5 59 129.3 107.2 127.8 25.2-.6 43-17.9 75.8-17.9 31.8 0 48.3 17.9 76.4 17.9 48.6-.7 90.4-84.1 102.6-121.7-65.2-30.7-61.7-90-61.7-92.1zm-56.6-164.2c27.3-32.4 24.8-61.9 24-72.5-24.1 1.4-52 16.4-67.9 34.9-17.5 19.8-27.8 44.3-25.6 71.9 26.1 2 49.9-11.4 69.5-34.3z"/>
         </svg>
-        Continue with Apple
-      </a>
+        {oauthLoading === "apple" ? "Redirecting…" : "Continue with Apple"}
+      </button>
     </div>
   );
 }
@@ -833,7 +863,10 @@ export default function LoginPage({ onSuccess }) {
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const err = params.get("oauth_error");
+    // Supabase's own OAuth-callback errors land in the URL hash
+    // (#error=...&error_description=...), not the query string.
+    const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+    const err = params.get("oauth_error") || hashParams.get("error_description") || hashParams.get("error");
     if (err) {
       setOauthError(err);
       window.history.replaceState(null, "", window.location.pathname);
