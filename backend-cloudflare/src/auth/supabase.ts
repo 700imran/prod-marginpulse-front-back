@@ -57,7 +57,7 @@ export async function verifySupabaseToken(
 
   const { payload } = await jwtVerify(bearerToken, JWKS, {
     issuer: `${env.SUPABASE_URL}/auth/v1`,
-    algorithms: ["RS256"],
+    algorithms: ["RS256", "ES256"],
   });
 
   if (!payload.sub || !payload.email) {
