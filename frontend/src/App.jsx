@@ -94,7 +94,7 @@ function AppShell() {
         <aside className={`sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
           <div className="logo">
             <div className="logo-inner">
-              <div className="logo-icon"></div>
+              <div className="logo-icon" aria-hidden="true">M</div>
               <span className="logo-text">MarginPulse</span>
             </div>
             <button className="sidebar-toggle" onClick={() => setSidebarCollapsed(!sidebarCollapsed)}>

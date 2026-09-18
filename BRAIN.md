@@ -1,5 +1,157 @@
 # BRAIN.md — Engineering Handover
 
+> ## ⚠️ READ THIS FIRST — Architecture moved since the rest of this file was written
+>
+> Everything below (`Current Architecture`, `Folder Structure`, `Next 10
+> Tasks`, etc.) describes the **old Go + AWS Lambda + DynamoDB** stack
+> under `/backend`. **That is not what's live in production anymore.**
+> The actual live stack today is:
+>
+> - **Frontend**: `frontend/` (unchanged CRA app), deployed on **Vercel**
+>   (project `marginpulse-app`, auto-deploys from `main`).
+> - **Backend**: `backend-cloudflare/` — a Cloudflare Worker
+>   (`prod-marginpulse-front-back`), Hono-style routing. This is what
+>   actually serves `/api/v1/...` in production now, **not** `/backend`.
+> - **Database/Auth**: Supabase (project `marginpulse-pro`,
+>   ref `nseurvhbqkdlemcfoixt`) — Postgres + Supabase Auth
+>   (email/password + Google OAuth, both via `supabase-js` directly from
+>   the frontend, not through the Worker).
+> - **DB connection**: Cloudflare Hyperdrive (`marginpulse-db`) sits in
+>   front of Supabase's connection pooler
+>   (`aws-0-ap-south-1.pooler.supabase.com:6543`).
+> - **File storage**: Cloudflare R2 bucket `marginpulse-documents`
+>   (replaces S3).
+> - **CI/CD**: `.github/workflows/deploy-worker.yml` — pushing to `main`
+>   under `backend-cloudflare/**` auto-runs `wrangler deploy` (needs the
+>   `CLOUDFLARE_API_TOKEN` repo secret, already configured).
+>
+> **`/backend` (Go/DynamoDB/SQS/SAM)'s current status is unknown** — it
+> may be fully abandoned, or it may still hold logic (e.g. the
+> reconciliation matching engine, GST sync heuristics) that hasn't been
+> ported to `backend-cloudflare/` yet and needs auditing feature-by-
+> feature. **Don't assume anything in section D below ("Completed
+> Modules") is actually live** — it describes what the Go backend had,
+> not what `backend-cloudflare/` has today. This needs a real audit as
+> a next step (not done in this pass — see "Open flags" below).
+>
+> What got fixed in the Cloudflare/Supabase/Vercel stack this session,
+> in order: (1) frontend showed a blank white screen — root cause was
+> missing `REACT_APP_SUPABASE_URL`/`REACT_APP_SUPABASE_ANON_KEY` Vercel
+> build env vars, plus `REACT_APP_API_URL` missing its `https://`
+> scheme; (2) Hyperdrive was pointed at Supabase's direct connection
+> (`:5432`) instead of the pooler (`:6543`) — fixed; (3) Worker's
+> `SUPABASE_URL`/`FRONTEND_ORIGIN` vars were still template placeholders
+> — fixed; (4) login was 100% failing with 401s — the Worker verified
+> tokens as HS256 against a shared secret, but this Supabase project
+> (created after Oct 1, 2025) issues asymmetric-signed tokens by
+> default — rewrote `backend-cloudflare/src/auth/supabase.ts` to verify
+> via JWKS (`createRemoteJWKSet`), accepting both RS256 and ES256; (5)
+> Google/Apple OAuth buttons in `LoginPage.jsx` were dead links to Go-
+> backend routes that don't exist on the Worker — rewired to call
+> `supabase.auth.signInWithOAuth()` directly, matching how
+> email/password login already works. Google OAuth is now enabled in
+> Supabase; **Apple OAuth is not yet enabled** (needs a paid Apple
+> Developer account + Services ID — external, not doable via API).
+>
+> ## This pass (frontend visual/branding pass)
+>
+> Scope was deliberately narrow, per explicit instruction: **frontend
+> only** — no ML models, no new backend features this pass.
+>
+> 1. **Re-synced `frontend/src/theme.js`'s color palette to the
+>    marketing site's** (`marginpulse.page` repo, `css/global.css`).
+>    The app was using an unrelated bright-green (`#00c07f`)/purple
+>    palette; the marketing site's actual brand is slate
+>    (`#0f172a`)/teal (`#0d9488`). All `--primary-color` etc. tokens and
+>    every hardcoded green hex/rgba in `theme.js` were switched to the
+>    teal/slate equivalents. Card/button border-radius was also nudged
+>    from 16px toward the marketing site's 14px for a closer visual
+>    match.
+> 2. **Sidebar logo mark now matches the marketing site's exactly**:
+>    a slate (`#0f172a`) rounded square with a bold white "M", instead
+>    of the previous unlabeled skewed teal shape (copied from
+>    `marginpulse.page/js/components.js`'s `.nav-logo-mark`).
+> 3. **Sidebar collapse behavior** (`App.jsx` + `theme.js`): collapsed
+>    state is now a 76px logo-only rail — nav items are fully hidden,
+>    not just icon-only as before. Hovering the collapsed rail expands
+>    it to 240px and reveals full nav (icons + labels), matching what
+>    was asked for ("logo icon when closed, sidebar icon only on hover
+>    or click"). The manual toggle button still exists for a permanent
+>    pin open/closed. **Known trade-off**: this is a normal-flow width
+>    change, so hovering does shift `main-content` slightly rather than
+>    floating over it as an absolute overlay — acceptable for now, a
+>    non-reflowing overlay version would be a nice later polish.
+> 4. **Feature tier labels added** to `NAV_SECTIONS` in `theme.js`,
+>    based on the Free/Pro/Growth/Scale strategy doc the product owner
+>    provided this session (see "Open flags" — this strategy conflicts
+>    with the live marketing site's actual pricing page):
+>    - No badge (implicitly Free/core): Dashboard, Documents Matrix,
+>      ROI Calculator, Profile, Tax IDs & Bank Accounts, Security,
+>      Billing & Plans (billing had an incorrect "Pro" badge before
+>      this pass — fixed, since gating billing itself behind a paid
+>      plan makes no sense).
+>    - **Pro** badge: Tax Portal Sync (GST), Reconciliation Rules,
+>      Audit Trail.
+>    - **Growth** badge: API & Integrations, Notifications, Audit Team.
+>    - No **Scale**-tier UI exists yet to label (revenue leakage,
+>      advanced anomaly engine, portfolio dashboard — none of these
+>      screens exist in the app yet, so there's nothing to badge; this
+>      naturally satisfies "don't show more features until production
+>      ready" since they're simply not built).
+>    - **These badges are cosmetic/informational only — not enforced.**
+>      There is no `plan`/`subscription_tier` column anywhere in the
+>      Supabase schema (`tenants` table has no such field) and no
+>      billing-status check gating any route or component. A user on
+>      any plan can currently click into every "Pro"/"Growth"-badged
+>      screen and it will work. Real enforcement is backend work, not
+>      started.
+> 5. **Fixed the still-open favicon/manifest gap** flagged earlier this
+>    session but never actually fixed: generated a real icon set (same
+>    slate-square-with-"M" mark, sizes 16/32/48/180/192/512) into
+>    `frontend/public/`, added `favicon.ico`, `apple-touch-icon.png`,
+>    `manifest.json`, and the corresponding `<link>`/`<meta>` tags in
+>    `index.html`. Also deleted a stray 1-byte junk file
+>    (`public/redfs.md`) found sitting in the repo.
+> 6. Verified with a real `CI=true npm run build` — compiled
+>    successfully, no regressions.
+>
+> ## Open flags — decisions needed before the next pass goes further
+>
+> - **Pricing/plan-structure conflict, unresolved**: the strategy doc
+>   used to badge features this pass proposes **Free → Pro ₹999 →
+>   Growth ₹2,499 → Scale ₹4,999+**, aimed at individual CAs bottom-up.
+>   The **live marketing site's actual `pages/pricing.html`** has a
+>   completely different structure already published: **Solo / Growth
+>   / CA Firm / Large Firm**, starting at **₹15,000/month** — a
+>   top-down enterprise-ish model. These are not reconcilable as
+>   written. The in-app tier badges added this pass follow the
+>   strategy doc's tier *names* (Free/Pro/Growth/Scale) since that's
+>   what was explicitly asked for, but **the marketing site was not
+>   touched or reconciled to match** — someone needs to decide which
+>   pricing model is actually going to market before the two surfaces
+>   can be made to genuinely "cooperate," and before real backend plan
+>   enforcement is built against either one.
+> - **`/backend` (Go) vs `backend-cloudflare/` feature parity: unaudited.**
+>   Needs a side-by-side pass to confirm which of section D's
+>   "✅ Complete" modules actually exist in `backend-cloudflare/` today.
+> - **Per-page tier badges are a coarse first pass**, not a real
+>   feature-level audit. E.g. "Dashboard" is unbadged/Free but likely
+>   contains some genuinely Pro-tier widgets (ITC risk detail) mixed
+>   with genuinely-Free ones (basic counts) — splitting that requires
+>   component-level work, not a nav-level badge.
+> - **Apple OAuth still not enabled** (needs external paid Apple
+>   Developer setup).
+> - **Marketing site itself untouched this pass** — it was already the
+>   correct brand reference (teal/slate), so the fix direction was
+>   "make the app match the marketing site," not the reverse. If the
+>   marketing site's pricing page changes per the flag above, its own
+>   HTML/CSS will need edits too — that's a separate repo
+>   (`marginpulse.page`), not covered by this pass's push.
+>
+> Next 10 Tasks below (section H) predates this pass and is about the
+> old Go/AWS backend — treat it as historical until someone re-derives
+> a task list against `backend-cloudflare/`'s actual current state.
+
 **Read this first.** This document assumes you have no access to any
 prior conversation about this project. Deeper detail on every section
 below lives in `docs/` — this file is the map, `docs/` is the

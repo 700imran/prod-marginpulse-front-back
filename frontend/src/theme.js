@@ -7,22 +7,25 @@ import React from "react";
 
 export const GLOBAL_CSS = `
 :root {
-    --primary-color: #00c07f;
-    --primary-light: #e6f8f1;
-    --bg-color: #e9ecef;
+    --primary-color: #0d9488;
+    --primary-dark: #0f766e;
+    --primary-light: #f0fdfa;
+    --bg-color: #f1f5f9;
     --card-bg: #ffffff;
-    --text-dark: #1a1a1a;
-    --text-gray: #717d8a;
-    --border-color: #dfe4e8;
-    --danger-color: #ff5b5b;
-    --warning-color: #f5a623;
-    --border-radius: 16px;
-    --pro-color: #8b5cf6;
+    --text-dark: #0f172a;
+    --text-gray: #64748b;
+    --border-color: #e2e8f0;
+    --danger-color: #ef4444;
+    --warning-color: #f59e0b;
+    --border-radius: 14px;
+    --pro-color: #0d9488;
+    --growth-color: #6366f1;
+    --scale-color: #f59e0b;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
 
-body { background-color: #d8dee3; color: var(--text-dark); }
+body { background-color: #e8eef2; color: var(--text-dark); }
 
 .dashboard-container {
     width: 100%; max-width: 1500px; height: 96vh; margin: 2vh auto;
@@ -36,25 +39,44 @@ body { background-color: #d8dee3; color: var(--text-dark); }
     display: flex; flex-direction: column; border-right: 1px solid var(--border-color);
     transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); overflow: hidden; flex-shrink: 0; position: relative;
 }
-.sidebar.collapsed { width: 80px; }
+.sidebar.collapsed { width: 76px; padding-left: 14px; padding-right: 14px; }
+.sidebar.collapsed:hover { width: 240px; box-shadow: 0 16px 48px rgba(15,23,42,.18); z-index: 40; }
 .logo { font-size: 20px; font-weight: bold; display: flex; align-items: center; justify-content: space-between; margin-bottom: 40px; color: var(--text-dark); white-space: nowrap; }
 .logo-inner { display: flex; align-items: center; gap: 10px; }
 .sidebar.collapsed .logo-text { opacity: 0; width: 0; overflow: hidden; }
-.logo-icon { width: 26px; height: 26px; background: var(--primary-color); border-radius: 6px; transform: skewX(-10deg); flex-shrink: 0; box-shadow: 0 4px 10px rgba(0, 192, 127, 0.3); }
+.logo-icon { width: 32px; height: 32px; background: var(--text-dark); color: #fff; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 15px; }
 .sidebar-toggle { background: none; border: none; cursor: pointer; color: var(--text-gray); font-size: 18px; transition: transform 0.2s; }
 .sidebar-toggle:hover { color: var(--primary-color); }
 .nav-section { margin-bottom: 25px; }
+/* Collapsed + not hovered: only the logo icon shows, nav is fully hidden.
+   Hovering the rail (or the pinned-open state) reveals the nav again. */
+.sidebar.collapsed .nav-section,
+.sidebar.collapsed .logout {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+}
+.sidebar.collapsed:hover .nav-section,
+.sidebar.collapsed:hover .logout {
+    opacity: 1;
+    pointer-events: auto;
+}
 .nav-section p { font-size: 11px; font-weight: 700; color: var(--text-gray); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; transition: opacity 0.2s; }
 .sidebar.collapsed .nav-section p { opacity: 0; height: 0; margin: 0; }
+.sidebar.collapsed:hover .nav-section p { opacity: 1; height: auto; margin: 0 0 12px; }
 .nav-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; color: var(--text-gray); text-decoration: none; border-radius: 10px; margin-bottom: 4px; font-weight: 600; font-size: 14px; transition: all 0.2s ease; white-space: nowrap; cursor: pointer; border: none; background: transparent; width: 100%; text-align: left; }
-.nav-item:hover { background-color: rgba(0, 192, 127, 0.05); color: var(--text-dark); }
+.nav-item:hover { background-color: rgba(13, 148, 136, 0.05); color: var(--text-dark); }
 .nav-item.active { background-color: var(--primary-light); color: var(--primary-color); }
 .sidebar.collapsed .nav-label, .sidebar.collapsed .nav-badge { display: none; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 14px 0; }
+.sidebar.collapsed:hover .nav-label, .sidebar.collapsed:hover .nav-badge { display: inline; }
+.sidebar.collapsed:hover .nav-item { justify-content: flex-start; padding: 12px 14px; }
 .nav-badge { margin-left: auto; font-size: 10px; padding: 3px 8px; border-radius: 12px; font-weight: 800; }
-.badge-pro { background: rgba(139, 92, 246, 0.1); color: var(--pro-color); }
+.badge-pro { background: rgba(13, 148, 136, 0.1); color: var(--pro-color); }
+.badge-growth { background: rgba(99, 102, 241, 0.1); color: var(--growth-color); }
+.badge-scale { background: rgba(245, 158, 11, 0.12); color: var(--scale-color); }
 .badge-alert { background: rgba(245, 166, 35, 0.1); color: var(--warning-color); }
-.badge-ok { background: rgba(0, 192, 127, 0.1); color: var(--primary-color); }
+.badge-ok { background: rgba(13, 148, 136, 0.1); color: var(--primary-color); }
 .logout { margin-top: auto; color: var(--danger-color); }
 .logout:hover { background: rgba(255, 91, 91, 0.05); }
 
@@ -68,7 +90,7 @@ body { background-color: #d8dee3; color: var(--text-dark); }
 
 .user-profile { display: flex; align-items: center; gap: 15px; background: var(--card-bg); padding: 6px 16px 6px 6px; border-radius: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.02); cursor: pointer; transition: box-shadow 0.2s; position: relative; }
 .user-profile:hover { box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
-.avatar { width: 36px; height: 36px; background: linear-gradient(135deg, var(--primary-color), #009965); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 14px; flex-shrink: 0; }
+.avatar { width: 36px; height: 36px; background: linear-gradient(135deg, var(--primary-color), #0f766e); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 14px; flex-shrink: 0; }
 
 .profile-dropdown {
     position: absolute; top: calc(100% + 10px); right: 0; width: 280px;
@@ -110,8 +132,8 @@ input:checked + .slider:before { transform: translateX(22px); }
 /* Buttons */
 .btn { padding: 12px 24px; border-radius: 12px; font-weight: 600; font-size: 14px; cursor: pointer; border: none; transition: all 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none !important; }
-.btn-primary { background: var(--primary-color); color: white; box-shadow: 0 4px 12px rgba(0, 192, 127, 0.2); }
-.btn-primary:hover:not(:disabled) { background: #00a86f; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(0, 192, 127, 0.3); }
+.btn-primary { background: var(--primary-color); color: white; box-shadow: 0 4px 12px rgba(13, 148, 136, 0.2); }
+.btn-primary:hover:not(:disabled) { background: #0f766e; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(13, 148, 136, 0.3); }
 .btn-ghost { background: var(--bg-color); color: var(--text-gray); }
 .btn-ghost:hover:not(:disabled) { background: var(--border-color); }
 .btn-danger-ghost { background: rgba(255,91,91,0.1); color: var(--danger-color); }
@@ -120,7 +142,7 @@ input:checked + .slider:before { transform: translateX(22px); }
 .pro-block { opacity: 0.6; pointer-events: none; background: #f8fafc; }
 
 .badge-pill { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; }
-.badge-verified { background: rgba(0,192,127,0.12); color: #00875a; }
+.badge-verified { background: rgba(13,148,136,0.12); color: #0f766e; }
 .badge-pending { background: rgba(245,166,35,0.12); color: #b07300; }
 .badge-failed { background: rgba(255,91,91,0.12); color: #c93a3a; }
 .badge-unverified { background: #eef1f3; color: var(--text-gray); }
@@ -264,7 +286,7 @@ export const NAV_SECTIONS = [
     items: [
       { id: "dashboard", label: "Dashboard", icon: <Icons.Dashboard /> },
       { id: "documents", label: "Documents Matrix", icon: <Icons.Documents /> },
-      { id: "gst", label: "Tax Portal Sync", icon: <Icons.Sync /> },
+      { id: "gst", label: "Tax Portal Sync", icon: <Icons.Sync />, badge: "Pro", badgeClass: "badge-pro" },
       { id: "roi", label: "ROI Calculator", icon: <Icons.Lightning /> },
     ],
   },
@@ -273,18 +295,18 @@ export const NAV_SECTIONS = [
     items: [
       { id: "profile", label: "Profile Configurations", icon: <Icons.Profile /> },
       { id: "taxbank", label: "Tax IDs & Bank Accounts", icon: <Icons.Bank /> },
-      { id: "recon", label: "Reconciliation Rules", icon: <Icons.Rules /> },
-      { id: "api", label: "API & Integrations", icon: <Icons.Lightning /> },
-      { id: "notify", label: "Notifications", icon: <Icons.Bell /> },
+      { id: "recon", label: "Reconciliation Rules", icon: <Icons.Rules />, badge: "Pro", badgeClass: "badge-pro" },
+      { id: "api", label: "API & Integrations", icon: <Icons.Lightning />, badge: "Growth", badgeClass: "badge-growth" },
+      { id: "notify", label: "Notifications", icon: <Icons.Bell />, badge: "Growth", badgeClass: "badge-growth" },
       { id: "security", label: "Security & Sessions", icon: <Icons.Lock /> },
-      { id: "auditlog", label: "Audit Trail", icon: <Icons.Key /> },
+      { id: "auditlog", label: "Audit Trail", icon: <Icons.Key />, badge: "Pro", badgeClass: "badge-pro" },
     ],
   },
   {
-    title: "Premium",
+    title: "Account & Team",
     items: [
-      { id: "billing", label: "Billing & Plans", icon: <Icons.CreditCard />, badge: "Pro", badgeClass: "badge-pro" },
-      { id: "team", label: "Audit Team", icon: <Icons.Users /> },
+      { id: "billing", label: "Billing & Plans", icon: <Icons.CreditCard /> },
+      { id: "team", label: "Audit Team", icon: <Icons.Users />, badge: "Growth", badgeClass: "badge-growth" },
     ],
   },
 ];
