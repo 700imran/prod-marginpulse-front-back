@@ -303,12 +303,29 @@
 >    Worker needs this configured manually); could also be the same
 >    missing-build-env-var class of bug chased earlier for Vercel,
 >    independently, since Cloudflare's env vars for this Worker are a
->    separate configuration from Vercel's.
-> 10. Landing page (`marginpulse.page` repo) also now deployed
->     separately to Cloudflare as Worker `marginpulse-page` — this one
->     deployed successfully. User wants its branding kept in sync with
->     the app now that the app has the corrected exact brand colors —
->     see whether that sync happened this same pass or is still open.
+>    separate configuration from Vercel's. **Update: user reports this
+>    is now deployed successfully** (confirmed indirectly — the Worker's
+>    `modified_on` timestamp is fresh and `workers_get_worker_code` now
+>    errors trying to parse it as a single script instead of returning
+>    the old placeholder, consistent with real static assets now being
+>    there — couldn't verify by actually viewing the rendered page).
+> 10. **Landing page branding sync — done, pushed to `marginpulse.page`
+>     repo (separate repo, separate token from the main app repo).**
+>     Corrected the same approximated colors there too (the marketing
+>     site was the original reference for the app's colors, but it had
+>     the same `#0d9488`-ish approximation, not the exact `#18c496` from
+>     the official brand guide — fixed both together, everywhere the
+>     hex was hardcoded, not just the CSS variable). Replaced the plain
+>     "M" logo mark (in `js/components.js`, the shared nav/footer
+>     template used by all 19 pages) with the real bars+arrow icon —
+>     matches the app's sidebar mark exactly now. Also added a favicon/
+>     apple-touch-icon site-wide (it had none at all before, same gap
+>     the app had at the start of this whole session). **Caveat**: this
+>     is pushed to GitHub, but whether the live
+>     `marginpulse-page.imrankhan210r.workers.dev` Worker auto-deploys
+>     from a git push or needs a manual `wrangler deploy` is unknown —
+>     unlike the backend Worker, no GitHub Actions workflow was set up
+>     for this repo this session.
 
 **Read this first.** This document assumes you have no access to any
 prior conversation about this project. Deeper detail on every section
