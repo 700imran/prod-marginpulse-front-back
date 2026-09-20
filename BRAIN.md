@@ -148,6 +148,97 @@
 >   HTML/CSS will need edits too — that's a separate repo
 >   (`marginpulse.page`), not covered by this pass's push.
 >
+> ## Follow-up pass (same day) — sidebar fix, real brand colors, perf, a real data bug, charts
+>
+> 1. **Sidebar bug fix.** The hover-to-expand collapsed rail from the
+>    prior pass was wrong — clicking to close while the cursor stayed
+>    on the sidebar/toggle button meant the `:hover` CSS kept it visually
+>    open (only the wordmark text, which had no hover override, actually
+>    hid). Removed all hover-driven expand/collapse CSS. Now **pure
+>    click-only**: collapsed = logo/toggle button only, nothing else in
+>    the DOM shows; expanded = full nav. Also fixed `.sidebar`'s
+>    `overflow: hidden`, which was clipping nav items below the
+>    viewport instead of scrolling — now `overflow-y: auto`. The logo
+>    and the sidebar-toggle button were merged into one button that
+>    shows the brand mark by default and crossfades to a menu icon on
+>    hover (hover here is just a "click me" visual hint, scoped to that
+>    one button — it does not open/close anything by itself).
+> 2. **Real brand colors, from the official guide — this replaces the
+>    approximated marketing-site colors from the prior pass.** The user
+>    provided the actual "MarginPulse Integrated Branding and Design
+>    Guide" plus branded Letterhead/Invoice `.docx` templates. Exact
+>    values now in `theme.js`: Primary Teal `#18c496` (was approximated
+>    as `#0d9488`), Dark Gray `#333333` for body text (was approximated
+>    as slate `#0f172a`), Neutral Beige `#f5f1eb` as the page background
+>    (was cool slate-gray `#f1f5f9`), Mint Support `#aee9da`, Deep Navy
+>    `#1a3e5c` (reserved for reverse/dark panels, not used yet). One
+>    correction from the letterhead/invoice reference: the "Margin" half
+>    of the wordmark is a dark **teal**, not gray — `--primary-dark`
+>    (`#0f6e56`, derived) is used there, not `--text-dark`. The brand
+>    icon (bars + upward arrow) was regenerated with the exact gradient
+>    (`#aee9da` → `#18c496`) across the favicon/manifest/sidebar mark.
+>    **Standing note for future passes**: this hand-derived approximation
+>    from a flattened image is not a pixel-perfect vector trace of
+>    whatever the original design file is — if an actual `.ai`/`.svg`
+>    source of the logo exists, use that instead next time it's
+>    available.
+> 3. **Load-time**: all 13 (now 14, with the charts file) screens
+>    converted to `React.lazy` + `Suspense` in `App.jsx` instead of one
+>    eager bundle. Verified via `CI=true npm run build`: main bundle
+>    269.7KB gzipped (down from 282.6KB), 14 small per-screen chunks
+>    that only load on navigation.
+> 4. **Found and fixed a real, significant bug — not a speed issue.**
+>    `DashboardView.jsx` was written against the old Go backend's
+>    snake_case JSON and never updated when `backend-cloudflare` (which
+>    returns camelCase almost everywhere) went live. Net effect before
+>    this fix: **the dashboard's 4 headline stat cards, the entire
+>    "Today's Priorities" ITC-risk/vendor-followup/filing-deadline
+>    section, the AI plain-English insight banner, and the "Mark
+>    Resolved" button on anomalies were all silently broken** — reading
+>    fields like `summary_metrics`, `plain_english_insight`,
+>    `highest_itc_risk_today`, `anomaly_id` off responses that actually
+>    contain `summaryMetrics`, `plainEnglishInsight`,
+>    `highestItcRiskToday`, `anomalyId`. Fixed every instance in this
+>    file (cross-checked against the actual `backend-cloudflare`
+>    interfaces in `src/pipelines/dashboard.ts` and
+>    `src/repository/anomalies.ts`, not guessed). **Two endpoints
+>    genuinely do return snake_case on purpose**
+>    (`/reconciliation/detect-missing-invoices`'s
+>    `anomalies_created`/`bank_transactions_scanned`, and
+>    `/gst/sync-portal`'s `job_id`) — those were left alone, correctly.
+>    **This was only audited for `DashboardView.jsx`.** The same
+>    camelCase-vs-snake_case mismatch class of bug should be assumed
+>    possible in the other 12 screens until each is checked the same
+>    way — this was not done for the rest, for lack of time, not because
+>    it was ruled out.
+> 5. **Charts added** (`frontend/src/components/charts/index.jsx`, new
+>    `recharts` dependency): `StatusDonut` and `RiskBarChart`, built
+>    generic (`{label, value}[]` props) on purpose so the same
+>    components drop into a future multi-client/portfolio dashboard
+>    without rework — see `docs/COMMERCIAL_ROADMAP.md`. Wired into
+>    `DashboardView.jsx` using the now-fixed real data. Cost: recharts
+>    adds ~118KB gzipped, but it's isolated to the Dashboard's own lazy
+>    chunk (see #3), not the initial app-shell load.
+> 6. **`docs/COMMERCIAL_ROADMAP.md` created** — the CA-workflow/pricing-
+>    tier engineering backlog promised a couple of passes ago and not
+>    delivered until now (multi-client portfolio, action queue, vendor
+>    follow-up automation, team assignment, revenue leakage, etc., each
+>    mapped to what already exists vs. what's net-new). It also corrects
+>    a wrong claim from the prior BRAIN.md pass: `tenants.plan_tier`
+>    **does** exist in the schema (`FREE/STARTER/GROWTH/ENTERPRISE`) —
+>    a third tier-naming scheme on top of the marketing site's and the
+>    strategy doc's — it's just never checked anywhere, so enforcement
+>    is still not real. Read that file before touching pricing/tiers
+>    again.
+> 7. **Standing guardrail, not just for this pass**: the Letterhead/
+>    Invoice `.docx` templates and anything described as a "pitch deck"
+>    are external/investor-facing presentation material, not
+>    documentation of the actual system. Don't treat them as a source
+>    of truth for what the app does, and don't let pitch-appropriate
+>    simplification bleed into how the real architecture gets described
+>    elsewhere (this file, `docs/`, code comments). They're a UI/brand
+>    reference only.
+>
 > Next 10 Tasks below (section H) predates this pass and is about the
 > old Go/AWS backend — treat it as historical until someone re-derives
 > a task list against `backend-cloudflare/`'s actual current state.
