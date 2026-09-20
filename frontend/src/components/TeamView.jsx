@@ -43,7 +43,7 @@ export default function TeamView({ onToast }) {
     setSubmitting(true);
     setError("");
     const result = await inviteTeamMember(form.email.trim(), form.role);
-    if (result?.team_member_id) {
+    if (result?.teamMemberId) {
       setMembers((prev) => [result, ...prev]);
       setForm({ email: "", role: "VIEWER" });
       onToast?.("Invitation sent", "success");
@@ -55,8 +55,8 @@ export default function TeamView({ onToast }) {
 
   async function handleRevoke(id) {
     const result = await revokeTeamMember(id);
-    if (result?.team_member_id) {
-      setMembers((prev) => prev.map((m) => (m.team_member_id === id ? result : m)));
+    if (result?.teamMemberId) {
+      setMembers((prev) => prev.map((m) => (m.teamMemberId === id ? result : m)));
       onToast?.("Access revoked", "success");
     }
   }
@@ -101,20 +101,20 @@ export default function TeamView({ onToast }) {
         <p style={{ color: "var(--text-gray)", fontSize: 13 }}>No team members invited yet.</p>
       )}
       {members.map((m) => (
-        <div className="list-row" key={m.team_member_id}>
+        <div className="list-row" key={m.teamMemberId}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-              <span style={{ fontWeight: 700, fontSize: 14 }}>{m.invited_email}</span>
+              <span style={{ fontWeight: 700, fontSize: 14 }}>{m.invitedEmail}</span>
               {statusBadge(m.status)}
             </div>
             <div style={{ fontSize: 12, color: "var(--text-gray)" }}>
-              {m.role} · invited {new Date(m.invited_at).toLocaleDateString()}
+              {m.role} · invited {new Date(m.invitedAt).toLocaleDateString()}
             </div>
           </div>
           {m.status !== "REVOKED" && (
             <button
               style={{ padding: "6px 12px", fontSize: 12, borderRadius: 8, background: "rgba(255,91,91,0.1)", color: "var(--danger-color)", border: "none", cursor: "pointer", fontWeight: 600 }}
-              onClick={() => handleRevoke(m.team_member_id)}
+              onClick={() => handleRevoke(m.teamMemberId)}
             >
               Revoke
             </button>

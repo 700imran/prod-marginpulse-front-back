@@ -9,7 +9,7 @@ export default function BillingView({ tenant }) {
   return (
     <div className="card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-        <h3 style={{ fontSize: 18 }}>Current Plan: {tenant?.plan_tier === "FREE" ? "Auditor Free" : tenant?.plan_tier || "Auditor Free"}</h3>
+        <h3 style={{ fontSize: 18 }}>Current Plan: {tenant?.planTier === "FREE" ? "Auditor Free" : tenant?.planTier || "Auditor Free"}</h3>
         <span className="nav-badge badge-pro" style={{ padding: "4px 8px" }}>Payments not yet connected</span>
       </div>
 

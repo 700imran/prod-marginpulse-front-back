@@ -20,12 +20,12 @@ const STATUS_FILTERS = [
 ];
 
 const CORRECTABLE_FIELDS = [
-  { key: "vendor_name", label: "Vendor Name", type: "text" },
-  { key: "document_date", label: "Document Date", type: "date" },
-  { key: "invoice_number", label: "Invoice Number", type: "text" },
-  { key: "raw_total_amount", label: "Total Amount (₹)", type: "number" },
-  { key: "tax_amount", label: "Tax Amount (₹)", type: "number" },
-  { key: "tax_identifier", label: "GSTIN / Tax ID", type: "text" },
+  { key: "vendorName", label: "Vendor Name", type: "text" },
+  { key: "documentDate", label: "Document Date", type: "date" },
+  { key: "invoiceNumber", label: "Invoice Number", type: "text" },
+  { key: "rawTotalAmount", label: "Total Amount (₹)", type: "number" },
+  { key: "taxAmount", label: "Tax Amount (₹)", type: "number" },
+  { key: "taxIdentifier", label: "GSTIN / Tax ID", type: "text" },
 ];
 
 function statusBadge(status) {
@@ -70,18 +70,18 @@ function AuditLogList({ entries }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {entries.map((e) => (
-        <div key={e.audit_log_id} style={{ fontSize: 12, padding: "10px 12px", background: "var(--bg-color)", borderRadius: 10 }}>
+        <div key={e.auditLogId} style={{ fontSize: 12, padding: "10px 12px", background: "var(--bg-color)", borderRadius: 10 }}>
           <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 700, marginBottom: 4 }}>
             <span>{e.action.replaceAll("_", " ")}</span>
-            <span style={{ color: "var(--text-gray)", fontWeight: 600 }}>{new Date(e.created_at).toLocaleString("en-IN")}</span>
+            <span style={{ color: "var(--text-gray)", fontWeight: 600 }}>{new Date(e.createdAt).toLocaleString("en-IN")}</span>
           </div>
-          {e.field_name && (
+          {e.fieldName && (
             <div style={{ color: "var(--text-gray)" }}>
-              <strong>{e.field_name}</strong>: "{e.old_value || "—"}" → "{e.new_value || "—"}"
+              <strong>{e.fieldName}</strong>: "{e.oldValue || "—"}" → "{e.newValue || "—"}"
             </div>
           )}
           {e.reason && <div style={{ color: "var(--text-gray)", marginTop: 2 }}>Reason: {e.reason}</div>}
-          {e.actor_email && <div style={{ color: "var(--text-gray)", marginTop: 2 }}>By {e.actor_email}</div>}
+          {e.actorEmail && <div style={{ color: "var(--text-gray)", marginTop: 2 }}>By {e.actorEmail}</div>}
         </div>
       ))}
     </div>
@@ -99,8 +99,8 @@ function DocumentDetailModal({ doc, onClose, onSaved, onToast }) {
   const [auditLog, setAuditLog] = useState(null);
 
   useEffect(() => {
-    getDocumentAuditLog(doc.document_id).then((data) => setAuditLog(data?.items || []));
-  }, [doc.document_id]);
+    getDocumentAuditLog(doc.documentId).then((data) => setAuditLog(data?.items || []));
+  }, [doc.documentId]);
 
   async function handleSave() {
     if (!reason.trim()) {
@@ -109,16 +109,16 @@ function DocumentDetailModal({ doc, onClose, onSaved, onToast }) {
     }
     setSaving(true);
     const payload = { ...form };
-    payload.raw_total_amount = form.raw_total_amount === "" ? undefined : Number(form.raw_total_amount);
-    payload.tax_amount = form.tax_amount === "" ? undefined : Number(form.tax_amount);
-    const result = await correctDocument(doc.document_id, payload, reason);
+    payload.rawTotalAmount = form.rawTotalAmount === "" ? undefined : Number(form.rawTotalAmount);
+    payload.taxAmount = form.taxAmount === "" ? undefined : Number(form.taxAmount);
+    const result = await correctDocument(doc.documentId, payload, reason);
     setSaving(false);
-    if (result?.document_id) {
+    if (result?.documentId) {
       onToast?.("Correction saved", "success");
       setEditing(false);
       setReason("");
       onSaved(result);
-      getDocumentAuditLog(doc.document_id).then((data) => setAuditLog(data?.items || []));
+      getDocumentAuditLog(doc.documentId).then((data) => setAuditLog(data?.items || []));
     } else {
       onToast?.(result?.detail || "Could not save correction", "error");
     }
@@ -128,24 +128,24 @@ function DocumentDetailModal({ doc, onClose, onSaved, onToast }) {
     <Modal onClose={onClose}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16 }}>
         <div>
-          <h3 style={{ fontSize: 18 }}>{doc.vendor_name || doc.original_filename || "Document"}</h3>
+          <h3 style={{ fontSize: 18 }}>{doc.vendorName || doc.originalFilename || "Document"}</h3>
           <div style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {statusBadge(doc.processing_status)}
-            {doc.manually_corrected && <span className="badge-pill badge-pending">Manually Corrected</span>}
-            {doc.duplicate_of_document_id && <span className="badge-pill badge-failed">Possible Duplicate</span>}
+            {statusBadge(doc.processingStatus)}
+            {doc.manuallyCorrected && <span className="badge-pill badge-pending">Manually Corrected</span>}
+            {doc.duplicateOfDocumentId && <span className="badge-pill badge-failed">Possible Duplicate</span>}
           </div>
         </div>
         <button className="btn btn-ghost" onClick={onClose}>Close</button>
       </div>
 
-      {doc.reconciliation_reason && (
+      {doc.reconciliationReason && (
         <div style={{ background: "var(--bg-color)", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 13, color: "var(--text-dark)" }}>
-          <strong>Reconciliation evidence:</strong> {doc.reconciliation_reason}
+          <strong>Reconciliation evidence:</strong> {doc.reconciliationReason}
         </div>
       )}
-      {doc.duplicate_of_document_id && (
+      {doc.duplicateOfDocumentId && (
         <div style={{ background: "rgba(255,91,91,0.08)", borderRadius: 10, padding: "12px 14px", marginBottom: 16, fontSize: 13, color: "var(--danger-color)" }}>
-          Looks like a duplicate of document <code>{doc.duplicate_of_document_id}</code> — confirm before including in ITC claims.
+          Looks like a duplicate of document <code>{doc.duplicateOfDocumentId}</code> — confirm before including in ITC claims.
         </div>
       )}
 
@@ -163,13 +163,13 @@ function DocumentDetailModal({ doc, onClose, onSaved, onToast }) {
             <div>
               <div style={{ fontSize: 11, color: "var(--text-gray)", textTransform: "uppercase", letterSpacing: "0.04em" }}>OCR Confidence</div>
               <div style={{ fontSize: 14, fontWeight: 700, marginTop: 2 }}>
-                {doc.ocr_confidence_score ? `${Math.round(doc.ocr_confidence_score * 100)}%` : "—"}
+                {doc.ocrConfidenceScore ? `${Math.round(doc.ocrConfidenceScore * 100)}%` : "—"}
               </div>
             </div>
             <div>
               <div style={{ fontSize: 11, color: "var(--text-gray)", textTransform: "uppercase", letterSpacing: "0.04em" }}>Reconciliation Score</div>
               <div style={{ fontSize: 14, fontWeight: 700, marginTop: 2 }}>
-                {doc.reconciliation_score ? `${Math.round(doc.reconciliation_score * 100)}%` : "—"}
+                {doc.reconciliationScore ? `${Math.round(doc.reconciliationScore * 100)}%` : "—"}
               </div>
             </div>
           </div>
@@ -242,7 +242,7 @@ export default function DocumentsView({ onToast }) {
   }
 
   function handleSaved(updatedDoc) {
-    setDocs((prev) => prev.map((d) => (d.document_id === updatedDoc.document_id ? { ...d, ...updatedDoc } : d)));
+    setDocs((prev) => prev.map((d) => (d.documentId === updatedDoc.documentId ? { ...d, ...updatedDoc } : d)));
     setSelectedDoc((prev) => (prev ? { ...prev, ...updatedDoc } : prev));
   }
 
@@ -261,21 +261,21 @@ export default function DocumentsView({ onToast }) {
       {loading && <p style={{ color: "var(--text-gray)", fontSize: 13 }}>Loading…</p>}
       {!loading && docs.length === 0 && <p style={{ color: "var(--text-gray)", fontSize: 13 }}>No documents found.</p>}
       {!loading && docs.map((d) => (
-        <div className="list-row" key={d.document_id} style={{ cursor: "pointer" }} onClick={() => setSelectedDoc(d)}>
+        <div className="list-row" key={d.documentId} style={{ cursor: "pointer" }} onClick={() => setSelectedDoc(d)}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
-              <span style={{ fontWeight: 700, fontSize: 14 }}>{d.vendor_name || d.original_filename || "Unknown vendor"}</span>
-              {statusBadge(d.processing_status)}
-              {d.manually_corrected && <span className="badge-pill badge-pending">Corrected</span>}
-              {d.duplicate_of_document_id && <span className="badge-pill badge-failed">Duplicate?</span>}
+              <span style={{ fontWeight: 700, fontSize: 14 }}>{d.vendorName || d.originalFilename || "Unknown vendor"}</span>
+              {statusBadge(d.processingStatus)}
+              {d.manuallyCorrected && <span className="badge-pill badge-pending">Corrected</span>}
+              {d.duplicateOfDocumentId && <span className="badge-pill badge-failed">Duplicate?</span>}
             </div>
             <div style={{ fontSize: 12, color: "var(--text-gray)" }}>
-              {d.doc_type} · {d.document_date || "no date"} · {d.tax_identifier || "no tax ID"}
+              {d.docType} · {d.documentDate || "no date"} · {d.taxIdentifier || "no tax ID"}
             </div>
           </div>
           <div style={{ textAlign: "right", flexShrink: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14 }}>{formatINR(d.raw_total_amount)}</div>
-            <div style={{ fontSize: 11, color: "var(--text-gray)" }}>{d.ingest_channel}</div>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>{formatINR(d.rawTotalAmount)}</div>
+            <div style={{ fontSize: 11, color: "var(--text-gray)" }}>{d.ingestChannel}</div>
           </div>
         </div>
       ))}

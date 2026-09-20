@@ -68,14 +68,14 @@ export default function GSTSyncView({ onToast }) {
           <div className="list-row" key={i}>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <span style={{ fontWeight: 700, fontSize: 14 }}>{v.vendor_name}</span>
-                {statusBadge(v.gst_portal_status)}
+                <span style={{ fontWeight: 700, fontSize: 14 }}>{v.vendorName}</span>
+                {statusBadge(v.gstPortalStatus)}
               </div>
               <div style={{ fontSize: 12, color: "var(--text-gray)", fontFamily: "monospace" }}>{v.gstin}</div>
             </div>
             <div style={{ textAlign: "right", flexShrink: 0 }}>
-              <div style={{ fontWeight: 700, fontSize: 14 }}>₹{Number(v.total_invoice_amount).toLocaleString("en-IN")}</div>
-              <div style={{ fontSize: 11, color: "var(--text-gray)" }}>{v.invoice_count} invoice(s)</div>
+              <div style={{ fontWeight: 700, fontSize: 14 }}>₹{Number(v.totalInvoiceAmount).toLocaleString("en-IN")}</div>
+              <div style={{ fontSize: 11, color: "var(--text-gray)" }}>{v.invoiceCount} invoice(s)</div>
             </div>
           </div>
         ))}

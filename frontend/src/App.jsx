@@ -47,7 +47,7 @@ function AppShell() {
   }, []);
 
   useEffect(() => {
-    getProfile().then((data) => { if (data?.tenant_id) setTenant(data); });
+    getProfile().then((data) => { if (data?.tenantId) setTenant(data); });
   }, []);
 
   // Close the profile dropdown on outside click.
@@ -61,12 +61,12 @@ function AppShell() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  const navSections = tenant?.is_platform_admin
+  const navSections = tenant?.isPlatformAdmin
     ? [...NAV_SECTIONS, { title: "Platform Admin", items: [{ id: "admin", label: "Admin Panel", icon: <Icons.Key /> }] }]
     : NAV_SECTIONS;
 
   const activeTitle = navSections.flatMap((s) => s.items).find((i) => i.id === activeNav)?.label || "Dashboard";
-  const displayName = tenant?.display_name || tenant?.business_name || "Loading…";
+  const displayName = tenant?.displayName || tenant?.businessName || "Loading…";
 
   function renderContent() {
     switch (activeNav) {
@@ -161,7 +161,7 @@ function AppShell() {
                 <div className="profile-dropdown" onClick={(e) => e.stopPropagation()}>
                   <div className="profile-dropdown-header">
                     <div style={{ fontWeight: 700, fontSize: 14 }}>{displayName}</div>
-                    <div style={{ fontSize: 12, color: "var(--text-gray)" }}>{tenant?.owner_email}</div>
+                    <div style={{ fontSize: 12, color: "var(--text-gray)" }}>{tenant?.ownerEmail}</div>
                   </div>
                   <button className="profile-dropdown-item" onClick={() => { setActiveNav("profile"); setDropdownOpen(false); }}>
                     <span className="icon-wrapper"><Icons.Profile /></span> Edit Profile

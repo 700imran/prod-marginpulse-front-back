@@ -44,24 +44,24 @@ export default function AuditLogView() {
       {loading && <p style={{ fontSize: 13, color: "var(--text-gray)" }}>Loading…</p>}
       {!loading && entries.length === 0 && <p style={{ fontSize: 13, color: "var(--text-gray)" }}>No audit entries yet.</p>}
       {!loading && entries.map((e) => (
-        <div className="list-row" key={e.audit_log_id} style={{ alignItems: "flex-start" }}>
+        <div className="list-row" key={e.auditLogId} style={{ alignItems: "flex-start" }}>
           <div>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
               <span style={{ fontWeight: 700, fontSize: 14 }}>{e.action.replaceAll("_", " ")}</span>
-              <span className="badge-pill badge-unverified">{e.entity_type}</span>
+              <span className="badge-pill badge-unverified">{e.entityType}</span>
             </div>
-            {e.field_name && (
+            {e.fieldName && (
               <p style={{ fontSize: 13, color: "var(--text-gray)" }}>
-                <strong>{e.field_name}</strong>: "{e.old_value || "—"}" → "{e.new_value || "—"}"
+                <strong>{e.fieldName}</strong>: "{e.oldValue || "—"}" → "{e.newValue || "—"}"
               </p>
             )}
             {e.reason && <p style={{ fontSize: 13, color: "var(--text-gray)" }}>Reason: {e.reason}</p>}
             <p style={{ fontSize: 11, color: "var(--text-gray)", marginTop: 4 }}>
-              {e.entity_id} {e.actor_email ? `· by ${e.actor_email}` : ""}
+              {e.entityId} {e.actorEmail ? `· by ${e.actorEmail}` : ""}
             </p>
           </div>
           <div style={{ fontSize: 12, color: "var(--text-gray)", flexShrink: 0, textAlign: "right" }}>
-            {new Date(e.created_at).toLocaleString("en-IN")}
+            {new Date(e.createdAt).toLocaleString("en-IN")}
           </div>
         </div>
       ))}

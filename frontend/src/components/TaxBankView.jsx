@@ -58,8 +58,8 @@ export default function TaxBankView({ onToast }) {
   // Poll while anything is PENDING — stops automatically once everything
   // has resolved to VERIFIED/FAILED, so this doesn't poll forever.
   useEffect(() => {
-    const hasPending = taxIds.some((t) => t.verification_status === "PENDING") ||
-                        bankAccounts.some((b) => b.verification_status === "PENDING");
+    const hasPending = taxIds.some((t) => t.verificationStatus === "PENDING") ||
+                        bankAccounts.some((b) => b.verificationStatus === "PENDING");
     if (hasPending && !pollRef.current) {
       pollRef.current = setInterval(refresh, 4000);
     } else if (!hasPending && pollRef.current) {
@@ -76,10 +76,10 @@ export default function TaxBankView({ onToast }) {
     setTaxSubmitting(true);
     setTaxError("");
     const result = await addTaxIdentifier(taxForm.id_type, taxForm.id_value.trim(), taxForm.label || null);
-    if (result?.tax_identifier_id) {
+    if (result?.taxIdentifierId) {
       setTaxIds((prev) => [result, ...prev]);
       setTaxForm({ id_type: "GSTIN", id_value: "", label: "" });
-      onToast?.(`${result.id_type} submitted — verification in progress`, "success");
+      onToast?.(`${result.idType} submitted — verification in progress`, "success");
     } else {
       setTaxError(result?.detail || "Could not submit — check the format and try again");
     }
@@ -88,8 +88,8 @@ export default function TaxBankView({ onToast }) {
 
   async function handleReverifyTax(id) {
     const result = await reverifyTaxIdentifier(id);
-    if (result?.tax_identifier_id) {
-      setTaxIds((prev) => prev.map((t) => (t.tax_identifier_id === id ? result : t)));
+    if (result?.taxIdentifierId) {
+      setTaxIds((prev) => prev.map((t) => (t.taxIdentifierId === id ? result : t)));
       onToast?.("Re-verification started", "success");
     }
   }
@@ -97,14 +97,14 @@ export default function TaxBankView({ onToast }) {
   async function handleDeleteTax(id) {
     const ok = await deleteTaxIdentifier(id);
     if (ok) {
-      setTaxIds((prev) => prev.filter((t) => t.tax_identifier_id !== id));
+      setTaxIds((prev) => prev.filter((t) => t.taxIdentifierId !== id));
       onToast?.("Tax identifier removed", "success");
     }
   }
 
   async function handleSetPrimaryTax(id) {
     const result = await setPrimaryTaxIdentifier(id);
-    if (result?.tax_identifier_id) refresh();
+    if (result?.taxIdentifierId) refresh();
   }
 
   async function handleLinkBank(e) {
@@ -112,7 +112,7 @@ export default function TaxBankView({ onToast }) {
     setBankSubmitting(true);
     setBankError("");
     const result = await linkBankAccount(bankForm);
-    if (result?.bank_account_id) {
+    if (result?.bankAccountId) {
       setBankAccounts((prev) => [result, ...prev]);
       setBankForm({ bank_name: "", account_holder_name: "", account_number: "", ifsc_code: "", account_type: "CURRENT" });
       onToast?.("Bank account linked — verification in progress", "success");
@@ -124,8 +124,8 @@ export default function TaxBankView({ onToast }) {
 
   async function handleReverifyBank(id) {
     const result = await reverifyBankAccount(id);
-    if (result?.bank_account_id) {
-      setBankAccounts((prev) => prev.map((b) => (b.bank_account_id === id ? result : b)));
+    if (result?.bankAccountId) {
+      setBankAccounts((prev) => prev.map((b) => (b.bankAccountId === id ? result : b)));
       onToast?.("Re-verification started", "success");
     }
   }
@@ -133,14 +133,14 @@ export default function TaxBankView({ onToast }) {
   async function handleUnlinkBank(id) {
     const ok = await unlinkBankAccount(id);
     if (ok) {
-      setBankAccounts((prev) => prev.filter((b) => b.bank_account_id !== id));
+      setBankAccounts((prev) => prev.filter((b) => b.bankAccountId !== id));
       onToast?.("Bank account unlinked", "success");
     }
   }
 
   async function handleSetPrimaryBank(id) {
     const result = await setPrimaryBankAccount(id);
-    if (result?.bank_account_id) refresh();
+    if (result?.bankAccountId) refresh();
   }
 
   if (loading) {
@@ -194,26 +194,26 @@ export default function TaxBankView({ onToast }) {
           <p style={{ color: "var(--text-gray)", fontSize: 13 }}>No tax identifiers added yet.</p>
         )}
         {taxIds.map((t) => (
-          <div className="list-row" key={t.tax_identifier_id}>
+          <div className="list-row" key={t.taxIdentifierId}>
             <div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <span style={{ fontWeight: 700, fontSize: 14 }}>{t.id_type}</span>
-                <span style={{ fontFamily: "monospace", fontSize: 13, color: "var(--text-dark)" }}>{t.id_value}</span>
-                {t.is_primary && <span className="badge-pill badge-verified">Primary</span>}
-                <VerificationBadge status={t.verification_status} />
+                <span style={{ fontWeight: 700, fontSize: 14 }}>{t.idType}</span>
+                <span style={{ fontFamily: "monospace", fontSize: 13, color: "var(--text-dark)" }}>{t.idValue}</span>
+                {t.isPrimary && <span className="badge-pill badge-verified">Primary</span>}
+                <VerificationBadge status={t.verificationStatus} />
               </div>
               {t.label && <div style={{ fontSize: 12, color: "var(--text-gray)" }}>{t.label}</div>}
-              {t.verified_legal_name && <div style={{ fontSize: 12, color: "var(--text-gray)" }}>Registered name: {t.verified_legal_name}</div>}
-              {t.verification_error && <div className="inline-error" style={{ marginTop: 2 }}>{t.verification_error}</div>}
+              {t.verifiedLegalName && <div style={{ fontSize: 12, color: "var(--text-gray)" }}>Registered name: {t.verifiedLegalName}</div>}
+              {t.verificationError && <div className="inline-error" style={{ marginTop: 2 }}>{t.verificationError}</div>}
             </div>
             <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-              {!t.is_primary && (
-                <button style={smallBtn("ghost")} onClick={() => handleSetPrimaryTax(t.tax_identifier_id)}>Set Primary</button>
+              {!t.isPrimary && (
+                <button style={smallBtn("ghost")} onClick={() => handleSetPrimaryTax(t.taxIdentifierId)}>Set Primary</button>
               )}
-              {(t.verification_status === "PENDING" || t.verification_status === "FAILED") && (
-                <button style={smallBtn("ghost")} onClick={() => handleReverifyTax(t.tax_identifier_id)}>Re-verify</button>
+              {(t.verificationStatus === "PENDING" || t.verificationStatus === "FAILED") && (
+                <button style={smallBtn("ghost")} onClick={() => handleReverifyTax(t.taxIdentifierId)}>Re-verify</button>
               )}
-              <button style={smallBtn("danger")} onClick={() => handleDeleteTax(t.tax_identifier_id)}>Remove</button>
+              <button style={smallBtn("danger")} onClick={() => handleDeleteTax(t.taxIdentifierId)}>Remove</button>
             </div>
           </div>
         ))}
@@ -270,27 +270,27 @@ export default function TaxBankView({ onToast }) {
             <p style={{ color: "var(--text-gray)", fontSize: 13 }}>No bank accounts linked yet.</p>
           )}
           {bankAccounts.map((b) => (
-            <div className="list-row" key={b.bank_account_id}>
+            <div className="list-row" key={b.bankAccountId}>
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                  <span style={{ fontWeight: 700, fontSize: 14 }}>{b.bank_name}</span>
-                  <span style={{ fontFamily: "monospace", fontSize: 13 }}>•••• {b.account_number_last4}</span>
-                  {b.is_primary && <span className="badge-pill badge-verified">Primary</span>}
-                  <VerificationBadge status={b.verification_status} />
+                  <span style={{ fontWeight: 700, fontSize: 14 }}>{b.bankName}</span>
+                  <span style={{ fontFamily: "monospace", fontSize: 13 }}>•••• {b.accountNumberLast4}</span>
+                  {b.isPrimary && <span className="badge-pill badge-verified">Primary</span>}
+                  <VerificationBadge status={b.verificationStatus} />
                 </div>
                 <div style={{ fontSize: 12, color: "var(--text-gray)" }}>
-                  {b.account_holder_name} · {b.ifsc_code} · {b.account_type}
+                  {b.accountHolderName} · {b.ifscCode} · {b.accountType}
                 </div>
-                {b.verification_error && <div className="inline-error" style={{ marginTop: 2 }}>{b.verification_error}</div>}
+                {b.verificationError && <div className="inline-error" style={{ marginTop: 2 }}>{b.verificationError}</div>}
               </div>
               <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
-                {!b.is_primary && (
-                  <button style={smallBtn("ghost")} onClick={() => handleSetPrimaryBank(b.bank_account_id)}>Set Primary</button>
+                {!b.isPrimary && (
+                  <button style={smallBtn("ghost")} onClick={() => handleSetPrimaryBank(b.bankAccountId)}>Set Primary</button>
                 )}
-                {(b.verification_status === "PENDING" || b.verification_status === "FAILED") && (
-                  <button style={smallBtn("ghost")} onClick={() => handleReverifyBank(b.bank_account_id)}>Re-verify</button>
+                {(b.verificationStatus === "PENDING" || b.verificationStatus === "FAILED") && (
+                  <button style={smallBtn("ghost")} onClick={() => handleReverifyBank(b.bankAccountId)}>Re-verify</button>
                 )}
-                <button style={smallBtn("danger")} onClick={() => handleUnlinkBank(b.bank_account_id)}>Unlink</button>
+                <button style={smallBtn("danger")} onClick={() => handleUnlinkBank(b.bankAccountId)}>Unlink</button>
               </div>
             </div>
           ))}

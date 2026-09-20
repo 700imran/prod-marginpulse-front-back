@@ -1,6 +1,6 @@
 /**
  * AdminPanelView.jsx — Platform admin panel, only reachable when
- * tenant.is_platform_admin is true (see App.jsx's conditional nav
+ * tenant.isPlatformAdmin is true (see App.jsx's conditional nav
  * section and the backend's RequirePlatformAdmin middleware, which is
  * the REAL security boundary — this component being unreachable in the
  * UI is a convenience, not the access control).
@@ -157,7 +157,7 @@ function TenantsTab({ onToast }) {
 
   async function toggleActive(tenantId, current) {
     const result = await setTenantActive(tenantId, !current);
-    if (result?.tenant_id) {
+    if (result?.tenantId) {
       onToast?.(`Tenant ${!current ? "reactivated" : "suspended"}`, "success");
       refresh();
     } else {
@@ -171,21 +171,21 @@ function TenantsTab({ onToast }) {
     <div className="card">
       <h3 style={{ marginBottom: 16, fontSize: 16 }}>All Tenants ({tenants.length})</h3>
       {tenants.map((t) => (
-        <div className="list-row" key={t.tenant_id}>
+        <div className="list-row" key={t.tenantId}>
           <div>
             <div style={{ fontWeight: 700, fontSize: 14 }}>
-              {t.business_name} {t.is_platform_admin && <span style={{ fontSize: 10, color: "var(--primary-color)", marginLeft: 6 }}>ADMIN</span>}
+              {t.businessName} {t.isPlatformAdmin && <span style={{ fontSize: 10, color: "var(--primary-color)", marginLeft: 6 }}>ADMIN</span>}
             </div>
             <p style={{ fontSize: 12, color: "var(--text-gray)" }}>
-              {t.owner_email} · {t.plan_tier} · joined {new Date(t.created_at).toLocaleDateString()}
+              {t.ownerEmail} · {t.planTier} · joined {new Date(t.createdAt).toLocaleDateString()}
             </p>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: t.is_active ? "var(--primary-color)" : "var(--danger-color)" }}>
-              {t.is_active ? "● Active" : "● Suspended"}
+            <span style={{ fontSize: 11, fontWeight: 700, color: t.isActive ? "var(--primary-color)" : "var(--danger-color)" }}>
+              {t.isActive ? "● Active" : "● Suspended"}
             </span>
-            <button className="btn btn-ghost" onClick={() => toggleActive(t.tenant_id, t.is_active)}>
-              {t.is_active ? "Suspend" : "Reactivate"}
+            <button className="btn btn-ghost" onClick={() => toggleActive(t.tenantId, t.isActive)}>
+              {t.isActive ? "Suspend" : "Reactivate"}
             </button>
           </div>
         </div>

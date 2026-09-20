@@ -7,7 +7,7 @@ import { getProfile, updateProfile } from "../api";
 
 export default function ProfileView({ onToast, onProfileUpdated }) {
   const [profile, setProfile] = useState(null);
-  const [form, setForm] = useState({ display_name: "", business_name: "", phone_number: "" });
+  const [form, setForm] = useState({ displayName: "", businessName: "", phoneNumber: "" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -18,9 +18,9 @@ export default function ProfileView({ onToast, onProfileUpdated }) {
       if (!active || !data) return;
       setProfile(data);
       setForm({
-        display_name: data.display_name || "",
-        business_name: data.business_name || "",
-        phone_number: data.phone_number || "",
+        displayName: data.displayName || "",
+        businessName: data.businessName || "",
+        phoneNumber: data.phoneNumber || "",
       });
       setLoading(false);
     }).catch(() => setLoading(false));
@@ -34,11 +34,11 @@ export default function ProfileView({ onToast, onProfileUpdated }) {
     setError("");
     try {
       const updated = await updateProfile({
-        display_name: form.display_name || null,
-        business_name: form.business_name,
-        phone_number: form.phone_number || null,
+        displayName: form.displayName || null,
+        businessName: form.businessName,
+        phoneNumber: form.phoneNumber || null,
       });
-      if (updated?.tenant_id) {
+      if (updated?.tenantId) {
         setProfile(updated);
         onToast?.("Profile saved", "success");
         onProfileUpdated?.(updated);
@@ -64,23 +64,23 @@ export default function ProfileView({ onToast, onProfileUpdated }) {
           <input
             type="text"
             className="form-control"
-            value={form.display_name}
-            onChange={set("display_name")}
+            value={form.displayName}
+            onChange={set("displayName")}
             placeholder="e.g. CA. Imran Kathat"
             maxLength={255}
           />
         </div>
         <div className="form-group">
           <label className="form-label">Email Address</label>
-          <input type="email" className="form-control" value={profile?.owner_email || ""} disabled />
+          <input type="email" className="form-control" value={profile?.ownerEmail || ""} disabled />
         </div>
         <div className="form-group">
           <label className="form-label">Firm / Workspace Name</label>
           <input
             type="text"
             className="form-control"
-            value={form.business_name}
-            onChange={set("business_name")}
+            value={form.businessName}
+            onChange={set("businessName")}
             maxLength={255}
             required
           />
@@ -90,8 +90,8 @@ export default function ProfileView({ onToast, onProfileUpdated }) {
           <input
             type="text"
             className="form-control"
-            value={form.phone_number}
-            onChange={set("phone_number")}
+            value={form.phoneNumber}
+            onChange={set("phoneNumber")}
             placeholder="+919876543210"
             maxLength={20}
           />

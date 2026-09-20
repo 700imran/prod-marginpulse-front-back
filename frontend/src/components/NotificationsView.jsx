@@ -16,7 +16,7 @@ export default function NotificationsView({ onToast }) {
     getNotificationSettings().then((data) => {
       if (data) {
         setSettings(data);
-        setThreshold(data.critical_itc_threshold_inr);
+        setThreshold(data.criticalItcThresholdInr);
       }
       setLoading(false);
     });
@@ -25,7 +25,7 @@ export default function NotificationsView({ onToast }) {
   async function patch(fields) {
     setSaving(true);
     const updated = await updateNotificationSettings(fields);
-    if (updated?.weekly_audit_summary !== undefined) {
+    if (updated?.weeklyAuditSummary !== undefined) {
       setSettings(updated);
       onToast?.("Notification preferences updated", "success");
     } else {
@@ -37,7 +37,7 @@ export default function NotificationsView({ onToast }) {
   function handleThresholdBlur() {
     const num = Math.max(0, parseFloat(threshold) || 0);
     setThreshold(num);
-    patch({ critical_itc_threshold_inr: num });
+    patch({ criticalItcThresholdInr: num });
   }
 
   if (loading) return <div className="card"><p style={{ color: "var(--text-gray)" }}>Loading…</p></div>;
@@ -48,8 +48,8 @@ export default function NotificationsView({ onToast }) {
       <Toggle
         title="Critical ITC Missing"
         desc={`Email admin immediately if a vendor fails to file GSTR-1 exceeding ₹${Number(threshold).toLocaleString("en-IN")}.`}
-        checked={settings?.critical_itc_missing_alert}
-        onChange={(v) => { setSettings((s) => ({ ...s, critical_itc_missing_alert: v })); patch({ critical_itc_missing_alert: v }); }}
+        checked={settings?.criticalItcMissingAlert}
+        onChange={(v) => { setSettings((s) => ({ ...s, criticalItcMissingAlert: v })); patch({ criticalItcMissingAlert: v }); }}
         disabled={saving}
       />
       <div className="form-group" style={{ marginTop: 8, marginBottom: 8, maxWidth: 300 }}>
@@ -66,8 +66,8 @@ export default function NotificationsView({ onToast }) {
       <Toggle
         title="Weekly Audit Summary"
         desc="Receive a summary of all flagged variances and matched records every Friday."
-        checked={settings?.weekly_audit_summary}
-        onChange={(v) => { setSettings((s) => ({ ...s, weekly_audit_summary: v })); patch({ weekly_audit_summary: v }); }}
+        checked={settings?.weeklyAuditSummary}
+        onChange={(v) => { setSettings((s) => ({ ...s, weeklyAuditSummary: v })); patch({ weeklyAuditSummary: v }); }}
         disabled={saving}
       />
     </div>

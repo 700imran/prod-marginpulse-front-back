@@ -45,10 +45,10 @@ function ProviderCard({ title, logo, description, integration, children, onSync,
 
       {connected ? (
         <div>
-          {integration.external_account_name && (
+          {integration.externalAccountName && (
             <p style={{ fontSize: 12, color: "var(--text-gray)", marginBottom: 10 }}>
-              Account: <strong>{integration.external_account_name}</strong>
-              {integration.last_synced_at && ` · Last synced ${new Date(integration.last_synced_at).toLocaleString()}`}
+              Account: <strong>{integration.externalAccountName}</strong>
+              {integration.lastSyncedAt && ` · Last synced ${new Date(integration.lastSyncedAt).toLocaleString()}`}
             </p>
           )}
           <div style={{ display: "flex", gap: 10 }}>
@@ -59,8 +59,8 @@ function ProviderCard({ title, logo, description, integration, children, onSync,
             )}
             <button className="btn btn-ghost" onClick={onDisconnect}>Disconnect</button>
           </div>
-          {errored && integration.last_error && (
-            <p style={{ fontSize: 12, color: ERROR_STATUS_COLOR, marginTop: 8 }}>{integration.last_error}</p>
+          {errored && integration.lastError && (
+            <p style={{ fontSize: 12, color: ERROR_STATUS_COLOR, marginTop: 8 }}>{integration.lastError}</p>
           )}
         </div>
       ) : (
@@ -247,7 +247,7 @@ export default function IntegrationsView({ onToast }) {
   async function patch(fields) {
     setSaving(true);
     const updated = await updateIntegrationSettings(fields);
-    if (updated?.gst_auto_sync_enabled !== undefined) {
+    if (updated?.gstAutoSyncEnabled !== undefined) {
       setSettings(updated);
       onToast?.("Integration settings updated", "success");
     } else {
@@ -264,16 +264,16 @@ export default function IntegrationsView({ onToast }) {
         <h3 style={{ marginBottom: 24, fontSize: 18 }}>GST & WhatsApp</h3>
         <Toggle
           title="GST Portal Auto-Sync"
-          desc={`Fetch GSTR-2B JSON data automatically on day ${settings?.gst_auto_sync_day_of_month || 14} of every month.`}
-          checked={settings?.gst_auto_sync_enabled}
-          onChange={(v) => { setSettings((s) => ({ ...s, gst_auto_sync_enabled: v })); patch({ gst_auto_sync_enabled: v }); }}
+          desc={`Fetch GSTR-2B JSON data automatically on day ${settings?.gstAutoSyncDayOfMonth || 14} of every month.`}
+          checked={settings?.gstAutoSyncEnabled}
+          onChange={(v) => { setSettings((s) => ({ ...s, gstAutoSyncEnabled: v })); patch({ gstAutoSyncEnabled: v }); }}
           disabled={saving}
         />
         <Toggle
           title="WhatsApp API Integration"
           desc="Allow MarginPulse to draft and send ITC reminders directly via WhatsApp Business."
-          checked={settings?.whatsapp_outbound_enabled}
-          onChange={(v) => { setSettings((s) => ({ ...s, whatsapp_outbound_enabled: v })); patch({ whatsapp_outbound_enabled: v }); }}
+          checked={settings?.whatsappOutboundEnabled}
+          onChange={(v) => { setSettings((s) => ({ ...s, whatsappOutboundEnabled: v })); patch({ whatsappOutboundEnabled: v }); }}
           disabled={saving}
         />
       </div>
