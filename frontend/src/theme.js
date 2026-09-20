@@ -7,18 +7,21 @@ import React from "react";
 
 export const GLOBAL_CSS = `
 :root {
-    --primary-color: #0d9488;
-    --primary-dark: #0f766e;
-    --primary-light: #f0fdfa;
-    --bg-color: #f1f5f9;
+    --primary-color: #18c496;
+    --primary-dark: #0f6e56;
+    --primary-light: #eafbf5;
+    --mint-support: #aee9da;
+    --beige: #f5f1eb;
+    --deep-navy: #1a3e5c;
+    --bg-color: #f5f1eb;
     --card-bg: #ffffff;
-    --text-dark: #0f172a;
-    --text-gray: #64748b;
-    --border-color: #e2e8f0;
+    --text-dark: #333333;
+    --text-gray: #6b6b6b;
+    --border-color: #e5e0d6;
     --danger-color: #ef4444;
     --warning-color: #f59e0b;
     --border-radius: 14px;
-    --pro-color: #0d9488;
+    --pro-color: #18c496;
     --growth-color: #6366f1;
     --scale-color: #f59e0b;
 }
@@ -37,46 +40,42 @@ body { background-color: #e8eef2; color: var(--text-dark); }
 .sidebar {
     width: 260px; background-color: var(--card-bg); padding: 30px 20px;
     display: flex; flex-direction: column; border-right: 1px solid var(--border-color);
-    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); overflow: hidden; flex-shrink: 0; position: relative;
+    transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1); overflow-x: hidden; overflow-y: auto; flex-shrink: 0; position: relative;
 }
 .sidebar.collapsed { width: 76px; padding-left: 14px; padding-right: 14px; }
-.sidebar.collapsed:hover { width: 240px; box-shadow: 0 16px 48px rgba(15,23,42,.18); z-index: 40; }
-.logo { font-size: 20px; font-weight: bold; display: flex; align-items: center; justify-content: space-between; margin-bottom: 40px; color: var(--text-dark); white-space: nowrap; }
-.logo-inner { display: flex; align-items: center; gap: 10px; }
+.logo { font-size: 20px; font-weight: bold; display: flex; align-items: center; gap: 12px; margin-bottom: 40px; color: var(--text-dark); white-space: nowrap; }
 .sidebar.collapsed .logo-text { opacity: 0; width: 0; overflow: hidden; }
-.logo-icon { width: 32px; height: 32px; background: var(--text-dark); color: #fff; border-radius: 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 15px; }
-.sidebar-toggle { background: none; border: none; cursor: pointer; color: var(--text-gray); font-size: 18px; transition: transform 0.2s; }
-.sidebar-toggle:hover { color: var(--primary-color); }
+.logo-text-dark { color: var(--primary-dark); }
+.logo-text-accent { color: var(--primary-color); }
+/* Single button: shows the brand mark by default, swaps to a menu icon
+   on hover as a "click to toggle" hint. The swap is purely visual —
+   opening/closing the sidebar only ever happens on click, never hover. */
+.logo-toggle-btn { position: relative; width: 32px; height: 32px; flex-shrink: 0; border: none; background: transparent; padding: 0; cursor: pointer; border-radius: 8px; color: var(--text-gray); }
+.logo-toggle-btn:hover { background: var(--bg-color); }
+.logo-mark, .logo-hover-icon { position: absolute; inset: 0; width: 32px; height: 32px; transition: opacity 0.15s ease; }
+.logo-hover-icon { opacity: 0; padding: 6px; box-sizing: border-box; }
+.logo-toggle-btn:hover .logo-mark { opacity: 0; }
+.logo-toggle-btn:hover .logo-hover-icon { opacity: 1; }
 .nav-section { margin-bottom: 25px; }
-/* Collapsed + not hovered: only the logo icon shows, nav is fully hidden.
-   Hovering the rail (or the pinned-open state) reveals the nav again. */
+/* Collapsed: only the logo/toggle button shows, nav is fully hidden.
+   This is driven purely by the .collapsed class (set on click) — no
+   :hover rule here, so the sidebar never re-opens just because the
+   cursor happens to be resting on it. */
 .sidebar.collapsed .nav-section,
 .sidebar.collapsed .logout {
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s ease;
+    display: none;
 }
-.sidebar.collapsed:hover .nav-section,
-.sidebar.collapsed:hover .logout {
-    opacity: 1;
-    pointer-events: auto;
-}
-.nav-section p { font-size: 11px; font-weight: 700; color: var(--text-gray); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; transition: opacity 0.2s; }
-.sidebar.collapsed .nav-section p { opacity: 0; height: 0; margin: 0; }
-.sidebar.collapsed:hover .nav-section p { opacity: 1; height: auto; margin: 0 0 12px; }
+.nav-section p { font-size: 11px; font-weight: 700; color: var(--text-gray); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
 .nav-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; color: var(--text-gray); text-decoration: none; border-radius: 10px; margin-bottom: 4px; font-weight: 600; font-size: 14px; transition: all 0.2s ease; white-space: nowrap; cursor: pointer; border: none; background: transparent; width: 100%; text-align: left; }
-.nav-item:hover { background-color: rgba(13, 148, 136, 0.05); color: var(--text-dark); }
+.nav-item:hover { background-color: rgba(24, 196, 150, 0.05); color: var(--text-dark); }
 .nav-item.active { background-color: var(--primary-light); color: var(--primary-color); }
-.sidebar.collapsed .nav-label, .sidebar.collapsed .nav-badge { display: none; }
-.sidebar.collapsed .nav-item { justify-content: center; padding: 14px 0; }
-.sidebar.collapsed:hover .nav-label, .sidebar.collapsed:hover .nav-badge { display: inline; }
-.sidebar.collapsed:hover .nav-item { justify-content: flex-start; padding: 12px 14px; }
 .nav-badge { margin-left: auto; font-size: 10px; padding: 3px 8px; border-radius: 12px; font-weight: 800; }
-.badge-pro { background: rgba(13, 148, 136, 0.1); color: var(--pro-color); }
+.view-loading { padding: 60px 0; text-align: center; color: var(--text-gray); font-size: 14px; }
+.badge-pro { background: rgba(24, 196, 150, 0.1); color: var(--pro-color); }
 .badge-growth { background: rgba(99, 102, 241, 0.1); color: var(--growth-color); }
 .badge-scale { background: rgba(245, 158, 11, 0.12); color: var(--scale-color); }
 .badge-alert { background: rgba(245, 166, 35, 0.1); color: var(--warning-color); }
-.badge-ok { background: rgba(13, 148, 136, 0.1); color: var(--primary-color); }
+.badge-ok { background: rgba(24, 196, 150, 0.1); color: var(--primary-color); }
 .logout { margin-top: auto; color: var(--danger-color); }
 .logout:hover { background: rgba(255, 91, 91, 0.05); }
 
@@ -90,7 +89,7 @@ body { background-color: #e8eef2; color: var(--text-dark); }
 
 .user-profile { display: flex; align-items: center; gap: 15px; background: var(--card-bg); padding: 6px 16px 6px 6px; border-radius: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.02); cursor: pointer; transition: box-shadow 0.2s; position: relative; }
 .user-profile:hover { box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
-.avatar { width: 36px; height: 36px; background: linear-gradient(135deg, var(--primary-color), #0f766e); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 14px; flex-shrink: 0; }
+.avatar { width: 36px; height: 36px; background: linear-gradient(135deg, var(--primary-color), #0f6e56); border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 14px; flex-shrink: 0; }
 
 .profile-dropdown {
     position: absolute; top: calc(100% + 10px); right: 0; width: 280px;
@@ -132,8 +131,8 @@ input:checked + .slider:before { transform: translateX(22px); }
 /* Buttons */
 .btn { padding: 12px 24px; border-radius: 12px; font-weight: 600; font-size: 14px; cursor: pointer; border: none; transition: all 0.2s; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
 .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none !important; }
-.btn-primary { background: var(--primary-color); color: white; box-shadow: 0 4px 12px rgba(13, 148, 136, 0.2); }
-.btn-primary:hover:not(:disabled) { background: #0f766e; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(13, 148, 136, 0.3); }
+.btn-primary { background: var(--primary-color); color: white; box-shadow: 0 4px 12px rgba(24, 196, 150, 0.2); }
+.btn-primary:hover:not(:disabled) { background: #0f6e56; transform: translateY(-1px); box-shadow: 0 6px 16px rgba(24, 196, 150, 0.3); }
 .btn-ghost { background: var(--bg-color); color: var(--text-gray); }
 .btn-ghost:hover:not(:disabled) { background: var(--border-color); }
 .btn-danger-ghost { background: rgba(255,91,91,0.1); color: var(--danger-color); }
@@ -142,7 +141,7 @@ input:checked + .slider:before { transform: translateX(22px); }
 .pro-block { opacity: 0.6; pointer-events: none; background: #f8fafc; }
 
 .badge-pill { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; }
-.badge-verified { background: rgba(13,148,136,0.12); color: #0f766e; }
+.badge-verified { background: rgba(24,196,150,0.12); color: #0f6e56; }
 .badge-pending { background: rgba(245,166,35,0.12); color: #b07300; }
 .badge-failed { background: rgba(255,91,91,0.12); color: #c93a3a; }
 .badge-unverified { background: #eef1f3; color: var(--text-gray); }

@@ -3,25 +3,28 @@
  * user-provided mockup), with every nav item wired to real data and a
  * working Profile dropdown (load/edit/save, change password, logout).
  */
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
 import LoginPage from "./LoginPage";
 import { isLoggedIn, logout, getProfile } from "./api";
 import { GLOBAL_CSS, Icons, NAV_SECTIONS, Toast } from "./theme";
 
-import DashboardView from "./components/DashboardView";
-import DocumentsView from "./components/DocumentsView";
-import GSTSyncView from "./components/GSTSyncView";
-import ProfileView from "./components/ProfileView";
-import TaxBankView from "./components/TaxBankView";
-import ReconciliationRulesView from "./components/ReconciliationRulesView";
-import IntegrationsView from "./components/IntegrationsView";
-import NotificationsView from "./components/NotificationsView";
-import SecurityView from "./components/SecurityView";
-import BillingView from "./components/BillingView";
-import TeamView from "./components/TeamView";
-import AdminPanelView from "./components/AdminPanelView";
-import ROICalculatorView from "./components/ROICalculatorView";
-import AuditLogView from "./components/AuditLogView";
+// Every screen is its own chunk, loaded only when navigated to — keeps
+// the initial bundle to just the app shell + whichever screen loads
+// first, instead of shipping all 14 screens' code up front.
+const DashboardView = lazy(() => import("./components/DashboardView"));
+const DocumentsView = lazy(() => import("./components/DocumentsView"));
+const GSTSyncView = lazy(() => import("./components/GSTSyncView"));
+const ProfileView = lazy(() => import("./components/ProfileView"));
+const TaxBankView = lazy(() => import("./components/TaxBankView"));
+const ReconciliationRulesView = lazy(() => import("./components/ReconciliationRulesView"));
+const IntegrationsView = lazy(() => import("./components/IntegrationsView"));
+const NotificationsView = lazy(() => import("./components/NotificationsView"));
+const SecurityView = lazy(() => import("./components/SecurityView"));
+const BillingView = lazy(() => import("./components/BillingView"));
+const TeamView = lazy(() => import("./components/TeamView"));
+const AdminPanelView = lazy(() => import("./components/AdminPanelView"));
+const ROICalculatorView = lazy(() => import("./components/ROICalculatorView"));
+const AuditLogView = lazy(() => import("./components/AuditLogView"));
 
 function initials(name) {
   if (!name) return "??";
@@ -93,13 +96,34 @@ function AppShell() {
         {/* SIDEBAR */}
         <aside className={`sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
           <div className="logo">
-            <div className="logo-inner">
-              <div className="logo-icon" aria-hidden="true">M</div>
-              <span className="logo-text">MarginPulse</span>
-            </div>
-            <button className="sidebar-toggle" onClick={() => setSidebarCollapsed(!sidebarCollapsed)}>
-              ☰
+            <button
+              type="button"
+              className="logo-toggle-btn"
+              onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            >
+              <svg className="logo-mark" viewBox="0 0 100 100" aria-hidden="true">
+                <defs>
+                  <linearGradient id="mpBrandGrad" x1="0%" y1="100%" x2="100%" y2="0%">
+                    <stop offset="0%" stopColor="#aee9da" />
+                    <stop offset="100%" stopColor="#0f6e56" />
+                  </linearGradient>
+                </defs>
+                <rect x="8" y="56" width="17" height="30" rx="3" fill="url(#mpBrandGrad)" />
+                <rect x="32" y="40" width="17" height="46" rx="3" fill="url(#mpBrandGrad)" />
+                <rect x="56" y="24" width="17" height="62" rx="3" fill="url(#mpBrandGrad)" />
+                <path d="M5 64 L27 36 L42 52 L66 14" fill="none" stroke="url(#mpBrandGrad)" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M66 14 L86 6 L79 26" fill="none" stroke="url(#mpBrandGrad)" strokeWidth="9" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <svg className="logo-hover-icon" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <line x1="4" y1="7" x2="20" y2="7" />
+                <line x1="4" y1="12" x2="20" y2="12" />
+                <line x1="4" y1="17" x2="20" y2="17" />
+              </svg>
             </button>
+            <span className="logo-text">
+              <span className="logo-text-dark">Margin</span><span className="logo-text-accent">Pulse</span>
+            </span>
           </div>
 
           {navSections.map((section, idx) => (
@@ -157,7 +181,9 @@ function AppShell() {
           </div>
 
           <div className="fade-in" key={activeNav}>
-            {renderContent()}
+            <Suspense fallback={<div className="view-loading">Loading…</div>}>
+              {renderContent()}
+            </Suspense>
           </div>
         </main>
       </div>
