@@ -10,6 +10,7 @@
  * it always reflects actual account state even across devices/browsers.
  */
 import { useState, useEffect } from "react";
+import { StatusDonut, RiskBarChart } from "./charts";
 import {
   getDashboard, listAnomalies, resolveAnomaly, uploadDocument, triggerReconciliation,
   listBankAccounts, listTaxIdentifiers, getDashboardInsights, downloadReconciliationReport,
@@ -43,9 +44,9 @@ function formatINR(amount) {
  */
 function InsightsSection({ insights, onExport, onDetectMissing, detecting }) {
   if (!insights) return null;
-  const risk = insights.highest_itc_risk_today || [];
-  const vendors = insights.vendors_requiring_follow_up || [];
-  const deadlines = insights.filing_deadlines || [];
+  const risk = insights.highestItcRiskToday || [];
+  const vendors = insights.vendorsRequiringFollowUp || [];
+  const deadlines = insights.filingDeadlines || [];
 
   return (
     <div className="card">
@@ -53,7 +54,7 @@ function InsightsSection({ insights, onExport, onDetectMissing, detecting }) {
         <div>
           <h3 style={{ fontSize: 18, marginBottom: 4 }}>Today's Priorities</h3>
           <p style={{ fontSize: 13, color: "var(--text-gray)" }}>
-            Estimated recoverable ITC: <strong style={{ color: "var(--text-dark)" }}>{formatINR(insights.estimated_recoverable_itc)}</strong>
+            Estimated recoverable ITC: <strong style={{ color: "var(--text-dark)" }}>{formatINR(insights.estimatedRecoverableItc)}</strong>
           </p>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
@@ -68,7 +69,7 @@ function InsightsSection({ insights, onExport, onDetectMissing, detecting }) {
         <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
           {deadlines.map((d) => (
             <div
-              key={d.return_type}
+              key={d.returnType}
               style={{
                 flex: "1 1 200px", padding: "14px 16px", borderRadius: 12,
                 background: d.approaching ? "rgba(245,166,35,0.1)" : "var(--bg-color)",
@@ -76,10 +77,10 @@ function InsightsSection({ insights, onExport, onDetectMissing, detecting }) {
               }}
             >
               <div style={{ fontSize: 12, fontWeight: 700, color: d.approaching ? "var(--warning-color)" : "var(--text-gray)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                {d.return_type} · {d.period}
+                {d.returnType} · {d.period}
               </div>
               <div style={{ fontSize: 15, fontWeight: 700, marginTop: 4 }}>
-                Due {d.due_date} {d.approaching ? `— ${d.days_remaining} day${d.days_remaining === 1 ? "" : "s"} left` : ""}
+                Due {d.dueDate} {d.approaching ? `— ${d.daysRemaining} day${d.daysRemaining === 1 ? "" : "s"} left` : ""}
               </div>
             </div>
           ))}
@@ -93,10 +94,10 @@ function InsightsSection({ insights, onExport, onDetectMissing, detecting }) {
           </h4>
           {risk.length === 0 && <p style={{ fontSize: 13, color: "var(--text-gray)" }}>Nothing at risk right now.</p>}
           {risk.map((item) => (
-            <div key={item.document_id} style={{ padding: "10px 0", borderBottom: "1px solid var(--border-color)" }}>
+            <div key={item.documentId} style={{ padding: "10px 0", borderBottom: "1px solid var(--border-color)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700 }}>
-                <span>{item.vendor_name || "Unknown vendor"}</span>
-                <span>{formatINR(item.tax_amount)}</span>
+                <span>{item.vendorName || "Unknown vendor"}</span>
+                <span>{formatINR(item.taxAmount)}</span>
               </div>
               <p style={{ fontSize: 12, color: "var(--text-gray)", marginTop: 2 }}>{item.reason}</p>
             </div>
@@ -108,13 +109,13 @@ function InsightsSection({ insights, onExport, onDetectMissing, detecting }) {
           </h4>
           {vendors.length === 0 && <p style={{ fontSize: 13, color: "var(--text-gray)" }}>No vendors need a nudge right now.</p>}
           {vendors.map((v) => (
-            <div key={v.vendor_name} style={{ padding: "10px 0", borderBottom: "1px solid var(--border-color)" }}>
+            <div key={v.vendorName} style={{ padding: "10px 0", borderBottom: "1px solid var(--border-color)" }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700 }}>
-                <span>{v.vendor_name}</span>
-                <span>{formatINR(v.total_tax_at_risk)}</span>
+                <span>{v.vendorName}</span>
+                <span>{formatINR(v.totalTaxAtRisk)}</span>
               </div>
               <p style={{ fontSize: 12, color: "var(--text-gray)", marginTop: 2 }}>
-                {v.open_issue_count} open issue{v.open_issue_count === 1 ? "" : "s"}
+                {v.openIssueCount} open issue{v.openIssueCount === 1 ? "" : "s"}
               </p>
             </div>
           ))}
@@ -234,11 +235,11 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
       listTaxIdentifiers(),
       getDashboardInsights(),
     ]);
-    if (dash?.summary_metrics) setSummary(dash);
+    if (dash?.summaryMetrics) setSummary(dash);
     if (anom?.items) setAnomalies(anom.items);
     if (Array.isArray(bankAccounts)) setBankAccountCount(bankAccounts.length);
     if (Array.isArray(taxIds)) setTaxIdentifierCount(taxIds.length);
-    if (dashInsights?.generated_at) setInsights(dashInsights);
+    if (dashInsights?.generatedAt) setInsights(dashInsights);
     setLoading(false);
   }
 
@@ -269,7 +270,7 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
   async function handleResolve(anomalyId) {
     const result = await resolveAnomaly(anomalyId);
     if (result?.status === "RESOLVED") {
-      setAnomalies((prev) => prev.filter((a) => a.anomaly_id !== anomalyId));
+      setAnomalies((prev) => prev.filter((a) => a.anomalyId !== anomalyId));
       onToast?.("Anomaly resolved", "success");
     }
   }
@@ -311,11 +312,11 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
 
   if (loading) return <div className="card"><p style={{ color: "var(--text-gray)" }}>Loading dashboard…</p></div>;
 
-  const m = summary?.summary_metrics || {};
+  const m = summary?.summaryMetrics || {};
 
-  const hasDocuments = (m.total_uploaded_documents ?? 0) > 0;
+  const hasDocuments = (m.totalUploadedDocuments ?? 0) > 0;
   const hasBankAccount = (bankAccountCount ?? 0) > 0;
-  const hasGSTIN = Boolean(tenant?.gstin_number) || (taxIdentifierCount ?? 0) > 0;
+  const hasGSTIN = Boolean(tenant?.gstinNumber) || (taxIdentifierCount ?? 0) > 0;
 
   const onboardingSteps = [
     {
@@ -363,22 +364,48 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
       )}
 
       <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
-        <StatCard value={m.total_uploaded_documents ?? 0} label="Total Documents" accent="var(--text-dark)" />
-        <StatCard value={m.successfully_reconciled_count ?? 0} label="Auto-Matched" accent="var(--primary-color)" />
-        <StatCard value={m.unreconciled_anomalies_detected ?? 0} label="Needs Action" accent="var(--warning-color)" />
-        <StatCard value={m.gst_mismatch_flag_count ?? 0} label="GST Gaps" accent="var(--danger-color)" />
+        <StatCard value={m.totalUploadedDocuments ?? 0} label="Total Documents" accent="var(--text-dark)" />
+        <StatCard value={m.successfullyReconciledCount ?? 0} label="Auto-Matched" accent="var(--primary-color)" />
+        <StatCard value={m.unreconciledAnomaliesDetected ?? 0} label="Needs Action" accent="var(--warning-color)" />
+        <StatCard value={m.gstMismatchFlagCount ?? 0} label="GST Gaps" accent="var(--danger-color)" />
+      </div>
+
+      <div className="grid-2" style={{ gap: 20, marginBottom: 24 }}>
+        <div className="card">
+          <h4 style={{ fontSize: 14, marginBottom: 4, color: "var(--text-gray)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            Document Status
+          </h4>
+          <StatusDonut
+            data={[
+              { label: "Auto-Matched", value: m.successfullyReconciledCount ?? 0 },
+              { label: "Needs Action", value: m.unreconciledAnomaliesDetected ?? 0 },
+              { label: "GST Gaps", value: m.gstMismatchFlagCount ?? 0 },
+            ]}
+          />
+        </div>
+        <div className="card">
+          <h4 style={{ fontSize: 14, marginBottom: 4, color: "var(--text-gray)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+            Vendors by ITC at Risk
+          </h4>
+          <RiskBarChart
+            data={(insights?.vendorsRequiringFollowUp || [])
+              .slice(0, 6)
+              .map((v) => ({ label: v.vendorName, value: v.totalTaxAtRisk }))}
+            valueFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`}
+          />
+        </div>
       </div>
 
       <div style={{ marginBottom: 24 }}>
         <InsightsSection insights={insights} onExport={handleExport} onDetectMissing={handleDetectMissing} detecting={detecting} />
       </div>
 
-      {summary?.plain_english_insight && (
+      {summary?.plainEnglishInsight && (
         <div className="card" style={{ background: "var(--primary-light)", borderLeft: "4px solid var(--primary-color)" }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--primary-color)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
             AI Insight
           </div>
-          <p style={{ fontSize: 14, color: "var(--text-dark)", lineHeight: 1.6 }}>{summary.plain_english_insight}</p>
+          <p style={{ fontSize: 14, color: "var(--text-dark)", lineHeight: 1.6 }}>{summary.plainEnglishInsight}</p>
         </div>
       )}
 
@@ -400,15 +427,15 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
         </div>
         {anomalies.length === 0 && <p style={{ color: "var(--text-gray)", fontSize: 13 }}>No open anomalies — everything is reconciled.</p>}
         {anomalies.map((a) => (
-          <div className="list-row" key={a.anomaly_id}>
+          <div className="list-row" key={a.anomalyId}>
             <div>
               <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
                 <SeverityDot severity={a.severity} />
-                <span style={{ fontWeight: 700, fontSize: 14 }}>{a.type}</span>
+                <span style={{ fontWeight: 700, fontSize: 14 }}>{a.anomalyType}</span>
               </div>
               <p style={{ fontSize: 13, color: "var(--text-gray)", paddingLeft: 16 }}>{a.description}</p>
             </div>
-            <button className="btn btn-ghost" style={{ flexShrink: 0 }} onClick={() => handleResolve(a.anomaly_id)}>
+            <button className="btn btn-ghost" style={{ flexShrink: 0 }} onClick={() => handleResolve(a.anomalyId)}>
               Mark Resolved
             </button>
           </div>
