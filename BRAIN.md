@@ -206,11 +206,8 @@
 >    (`/reconciliation/detect-missing-invoices`'s
 >    `anomalies_created`/`bank_transactions_scanned`, and
 >    `/gst/sync-portal`'s `job_id`) — those were left alone, correctly.
->    **This was only audited for `DashboardView.jsx`.** The same
->    camelCase-vs-snake_case mismatch class of bug should be assumed
->    possible in the other 12 screens until each is checked the same
->    way — this was not done for the rest, for lack of time, not because
->    it was ruled out.
+>    **Update: this was extended to the whole app in the next pass below
+>    (item 8) — no longer just `DashboardView.jsx`.**
 > 5. **Charts added** (`frontend/src/components/charts/index.jsx`, new
 >    `recharts` dependency): `StatusDonut` and `RiskBarChart`, built
 >    generic (`{label, value}[]` props) on purpose so the same
@@ -242,6 +239,76 @@
 > Next 10 Tasks below (section H) predates this pass and is about the
 > old Go/AWS backend — treat it as historical until someone re-derives
 > a task list against `backend-cloudflare/`'s actual current state.
+>
+> ## Follow-up pass 2 (same day) — the camelCase bug, app-wide
+>
+> 8. **Extended the DashboardView field-name audit to all 13 screens.**
+>    Reported symptom: "profile name/icon never loads, stuck on
+>    Loading forever" — traced to the exact same bug class as item 4
+>    above, but in `App.jsx`'s header (`tenant?.display_name` etc. —
+>    the literal string `"Loading…"` was the permanent fallback since
+>    `tenant` never populated) and `ProfileView.jsx`. Given how
+>    systemic this turned out to be, audited **every** component file
+>    against the real backend field names (pulled all ~104
+>    `snake_case as "camelCase"` SQL aliases from `backend-cloudflare/
+>    src/repository/*.ts` in one pass as a source-of-truth dictionary)
+>    and fixed every file: `App.jsx`, `ProfileView.jsx`,
+>    `AdminPanelView.jsx`, `DocumentsView.jsx`, `GSTSyncView.jsx`,
+>    `TaxBankView.jsx`, `TeamView.jsx`, `AuditLogView.jsx`,
+>    `NotificationsView.jsx`, `ReconciliationRulesView.jsx`,
+>    `IntegrationsView.jsx`, `BillingView.jsx`.
+>    - **Important nuance, don't blindly camelCase everything**: several
+>      endpoints deliberately use snake_case on purpose and must stay
+>      that way — `ROICalculatorView.jsx` is entirely snake_case
+>      end-to-end (its own `POST /roi` route, both request and
+>      response) and needed **no changes at all**. The tax-identifier
+>      and bank-account **creation forms** (`taxForm`/`bankForm` in
+>      `TaxBankView.jsx`) also correctly send snake_case
+>      (`id_type`/`id_value`, `bank_name`/`account_holder_name`/
+>      `account_number`/`ifsc_code`/`account_type`) because those two
+>      POST routes manually destructure snake_case from
+>      `c.req.json()` — but the **list responses** for the same two
+>      resources are camelCase (SQL-aliased), so the same file has both
+>      conventions side by side depending on read vs. write. Same
+>      pattern in `AdminPanelView.jsx`'s Slack/platform-settings section
+>      (`/admin/settings` hand-rolls snake_case both ways on purpose)
+>      and `IntegrationsView.jsx`'s credential fields (`key_id`/
+>      `key_secret`/`secret_key` — these intentionally mirror
+>      Razorpay/Stripe's own field names, not this app's convention).
+>      **Before touching any endpoint's field names again, check
+>      whether it's a raw `c.req.json()` destructure (snake_case) vs.
+>      a repository SQL-aliased return (camelCase) — don't assume one
+>      convention app-wide.**
+>    - Also found and left alone (out of scope, separate small gaps):
+>      `AdminPanelView.jsx`'s Google/Apple OAuth credential UI has *no
+>      backend at all* to connect to any more — a code comment in
+>      `admin.ts` confirms those fields were deliberately dropped since
+>      Google/Apple auth now goes through Supabase directly (consistent
+>      with how OAuth login was fixed earlier this session). That UI
+>      section is vestigial and should probably be removed, not fixed.
+>      Separately, `/admin/settings` never returns `updated_at`/
+>      `updated_by` even though the DB column is written — minor
+>      backend gap, "last updated by" text just never shows.
+> 9. User also deployed the frontend to **Cloudflare** (Worker
+>    `prod-marginpulse-frontend`) — build failed, live script is still
+>    the default `wrangler init` "Hello world" placeholder, meaning no
+>    real deploy has ever succeeded there. Cloudflare doesn't expose
+>    build logs through any tool available this session — whoever picks
+>    this up needs the actual error from Cloudflare Dashboard → Workers
+>    & Pages → `prod-marginpulse-frontend` → Deployments → the failed
+>    one → logs. Likely candidate causes, unconfirmed: deploying a CRA
+>    build to a Worker needs a `wrangler.toml` with an `[assets]`
+>    binding pointing at the `build/` folder (Cloudflare **Pages** is
+>    the simpler, purpose-built option for a static SPA — a plain
+>    Worker needs this configured manually); could also be the same
+>    missing-build-env-var class of bug chased earlier for Vercel,
+>    independently, since Cloudflare's env vars for this Worker are a
+>    separate configuration from Vercel's.
+> 10. Landing page (`marginpulse.page` repo) also now deployed
+>     separately to Cloudflare as Worker `marginpulse-page` — this one
+>     deployed successfully. User wants its branding kept in sync with
+>     the app now that the app has the corrected exact brand colors —
+>     see whether that sync happened this same pass or is still open.
 
 **Read this first.** This document assumes you have no access to any
 prior conversation about this project. Deeper detail on every section
