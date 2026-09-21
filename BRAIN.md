@@ -326,6 +326,91 @@
 >     from a git push or needs a manual `wrangler deploy` is unknown —
 >     unlike the backend Worker, no GitHub Actions workflow was set up
 >     for this repo this session.
+>
+> ## Follow-up pass 3 (same day) — positioning rewrite, then a real Lighthouse audit
+>
+> 11. **Fixed 13 more dead buttons** (`marginpulse-02-frontend-web.vercel.app`
+>     — a *third*, even older hardcoded URL, in blog posts/about/contact,
+>     missed by the earlier `APP_URL` fix since these were individually
+>     hardcoded strings, not references to the shared variable) — now
+>     all point to `app.marginpulse.in`. Also found and fixed the same
+>     wrong-domain bug (`marginpulsepro.in` instead of `marginpulse.in`)
+>     in canonical/OG tags, the hero mockup's fake browser bar, **and**
+>     `robots.txt`/`sitemap.xml` (missed on the first sweep — only `.html`
+>     files were checked that time).
+> 12. **Implemented the full controlled-beta positioning rewrite** (a
+>     separate strategy doc was produced first, then implemented on
+>     request — see the published artifact from that turn for the full
+>     audit/rationale). On `marginpulse.page`: hero badge/headline/CTAs
+>     rewritten (`Controlled Beta · Commercial Validation`, "Request
+>     Early Access" / "Book a Demo" everywhere, replacing "Live since
+>     June 2026 · 100+ businesses live" and "₹999 First Month" style
+>     CTAs sitewide); testimonials removed (unverifiable — this whole
+>     session found the product in a barely-functional state, not
+>     consistent with claimed live customers) and replaced with a Trust
+>     &amp; Transparency section; all 9 capability cards now carry an
+>     **Available Now / Beta / Coming Next** badge and were rewritten to
+>     match reality — "Real-Time Bank Sync via Account Aggregator" and
+>     "Revenue Leakage Detection" moved to Coming Next (neither exists
+>     in `backend-cloudflare`), "AI Invoice Matching" renamed to
+>     "Automated Invoice Matching" (it's deterministic, not AI — the one
+>     real AI part is the LLM dashboard summary); added a 5-phase
+>     Roadmap section. **`pages/pricing.html` deliberately left
+>     untouched** — its own separate ₹15,000+ tier structure is still
+>     the open 3-way pricing conflict from the earlier commercial
+>     roadmap pass, needs a business decision, not more copy edits.
+> 13. **A real Google PageSpeed Insights report surfaced a genuinely
+>     critical, previously-invisible bug**: `components.js` and
+>     `main.js` **both** declared `const APP_URL` at top level. Since
+>     both load as plain synchronous scripts sharing one global scope,
+>     this is a fatal `SyntaxError: Identifier 'APP_URL' has already
+>     been declared` — meaning **all of `main.js` silently failed to
+>     execute, on every page, the whole time this session's earlier nav
+>     work was happening**: the mobile hamburger menu, the cookie
+>     banner, and active-nav highlighting were all non-functional. This
+>     is almost certainly what an earlier "fix nav" request was actually
+>     about — checking the mobile-menu JS logic in isolation looked
+>     correct; the bug was only visible as a cross-file global-scope
+>     collision, which is why it wasn't caught until a real browser
+>     console error surfaced it. Fixed by removing the duplicate
+>     declaration from `main.js`.
+> 14. **Found completely separately from the PSI report, while checking
+>     a CSP question**: the contact form (`pages/contact.html`) was
+>     fake — `await new Promise(r => setTimeout(r, 900)); /* replace
+>     with real POST */` — it never sent anything anywhere, just showed
+>     a fake success message. Wired to a real `mailto:docs@marginpulse.in`
+>     handoff as a stopgap (opens the visitor's own email client,
+>     pre-filled). **A real backend endpoint for this is still a
+>     legitimate next step** — mailto is a functional fix, not the
+>     ideal one.
+> 15. Rest of the PSI-driven fixes: invalid ARIA (`role="table"` without
+>     required row/cell children on the dashboard-preview mockup → valid
+>     `role="list"`/`"listitem"`), three low-contrast text/background
+>     pairs, a heading-order skip (footer `<h4>` → `<h3>`, right after a
+>     page `<h2>`), added `Content-Security-Policy` and
+>     `Cross-Origin-Opener-Policy` to `vercel.json` (CSP still allows
+>     `'unsafe-inline'` for scripts/styles — the site uses `onclick=`/
+>     `style=` attributes everywhere; a fully strict CSP means
+>     refactoring every button, not done here), added `llms.txt`.
+>     Deliberately **not** done: combining the 3 render-blocking CSS
+>     files (~150ms estimated saving per Lighthouse) — real but minor,
+>     and risks missing a page-specific stylesheet across 20 pages for
+>     a small payoff.
+>
+> ## Open, unaddressed items carried forward
+>
+> - The 3-way pricing-tier-name conflict (marketing site's real
+>   `pages/pricing.html` vs. the Free/Pro/Growth/Scale strategy doc vs.
+>   the DB's `FREE/STARTER/GROWTH/ENTERPRISE` enum) — still unresolved,
+>   still needs a business decision before either site's pricing page or
+>   any real plan-enforcement backend work should change.
+> - A proper backend endpoint for the contact form, replacing the
+>   `mailto:` stopgap.
+> - `frontend/`'s other 12 screens have not been checked against a real
+>   PSI/Lighthouse report the way the marketing site just was — the
+>   `APP_URL`-style "looks fine in isolation, breaks in the browser"
+>   failure mode is a reminder that code review alone doesn't catch
+>   everything this codebase has been shipping with.
 
 **Read this first.** This document assumes you have no access to any
 prior conversation about this project. Deeper detail on every section
