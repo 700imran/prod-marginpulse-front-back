@@ -9,6 +9,7 @@ import { listByStatus, listAllForExport } from "../repository/documents";
 import { listAnomalies, getAnomalyById, resolveAnomaly } from "../repository/anomalies";
 import { appendAuditLog } from "../repository/auditLog";
 import { bulkInsertBankTransactions, type NewBankTransaction } from "../repository/bankTransactions";
+import { apiError } from "../http";
 
 export const reconciliationRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
@@ -16,7 +17,7 @@ reconciliationRoutes.use("*", requireAuth);
 
 // GET /reconciliation/dashboard-summary — mirrors HandleDashboardSummary.
 reconciliationRoutes.get("/dashboard-summary", async (c) => {
-  const summary = await buildDashboardSummary(c.get("sql"), c.env, c.get("tenant").tenantId);
+  const summary = await buildDashboardSummary(c.get("sql"), c.env, c.get("tenant"));
   return c.json(summary);
 });
 
@@ -54,7 +55,7 @@ reconciliationRoutes.post("/anomaly/:id/resolve", async (c) => {
   const sql = c.get("sql");
   const anomalyId = c.req.param("id");
   const existing = await getAnomalyById(sql, tenant.tenantId, anomalyId);
-  if (!existing) return c.json({ error: "anomaly not found" }, 404);
+  if (!existing) return apiError(c, 404, "NOT_FOUND", "anomaly not found");
 
   await resolveAnomaly(sql, tenant.tenantId, anomalyId, "RESOLVED", tenant.ownerEmail);
   await appendAuditLog(sql, { tenantId: tenant.tenantId, entityType: "ANOMALY", entityId: anomalyId, action: "ANOMALY_RESOLVED", actorEmail: tenant.ownerEmail });
@@ -107,11 +108,11 @@ reconciliationRoutes.post("/bank-csv-upload", async (c) => {
   const bankName = c.req.query("bank_name") ?? "";
   const form = await c.req.formData();
   const file = form.get("file");
-  if (!(file instanceof File)) return c.json({ error: "no CSV file provided" }, 400);
+  if (!(file instanceof File)) return apiError(c, 400, "VALIDATION_ERROR", "no CSV file provided");
 
   const text = await file.text();
   const rows = parseBankCSV(text);
-  if (rows.length === 0) return c.json({ error: "CSV file contains no valid transaction rows" }, 400);
+  if (rows.length === 0) return apiError(c, 400, "VALIDATION_ERROR", "CSV file contains no valid transaction rows");
 
   const tenantId = c.get("tenant").tenantId;
   const inserts: NewBankTransaction[] = rows.map((r) => ({

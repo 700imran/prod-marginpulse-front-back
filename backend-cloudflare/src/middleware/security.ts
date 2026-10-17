@@ -16,6 +16,15 @@ export const securityHeaders: MiddlewareHandler = async (c, next) => {
   c.header("X-Frame-Options", "DENY");
   c.header("Referrer-Policy", "strict-origin-when-cross-origin");
   c.header("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+  // This is a JSON API with no HTML/JS/CSS of its own to allow — deny
+  // everything by default. Mainly a backstop against a browser somehow
+  // rendering a response body as HTML (a misconfigured proxy, a
+  // navigated-to error page) rather than something this API relies on
+  // day-to-day, but it's a one-line addition with no downside here.
+  c.header("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'");
+  // No route on this API needs any of these; disable them all rather
+  // than inherit whatever a browser's default policy happens to be.
+  c.header("Permissions-Policy", "geolocation=(), camera=(), microphone=(), payment=(), usb=()");
 };
 
 export function corsMiddleware(): MiddlewareHandler<{ Bindings: Env }> {

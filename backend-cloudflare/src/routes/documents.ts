@@ -6,11 +6,13 @@ import { requireAuth } from "../middleware/auth";
 import { uploadBytes, downloadBytes, buildStorageKey, signDownloadToken, verifyDownloadToken } from "../storage";
 import {
   createDocument, getDocumentById, listDocumentsByTenant, updateDocumentFields, findDuplicateDocument,
+  softDeleteDocument, restoreDocument,
 } from "../repository/documents";
 import { appendAuditLog, listAuditLogForEntity } from "../repository/auditLog";
 import { createAnomaly } from "../repository/anomalies";
 import { processDocument, parseOcrLines } from "../pipelines/ocr";
 import { finalizeOcrResult } from "../queue/consumer";
+import { apiError } from "../http";
 
 export const documentRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
@@ -31,8 +33,8 @@ documentRoutes.post("/upload", async (c) => {
   const form = await c.req.formData();
   const file = form.get("file");
   const docType = (form.get("doc_type") as string) || "INVOICE";
-  if (!(file instanceof File)) return c.json({ error: "file is required (multipart field \"file\")" }, 400);
-  if (file.size > 15 * 1024 * 1024) return c.json({ error: "file exceeds 15MB limit" }, 400);
+  if (!(file instanceof File)) return apiError(c, 400, "VALIDATION_ERROR", 'file is required (multipart field "file")');
+  if (file.size > 15 * 1024 * 1024) return apiError(c, 400, "VALIDATION_ERROR", "file exceeds 15MB limit");
 
   const tenant = c.get("tenant");
   const sql = c.get("sql");
@@ -71,7 +73,7 @@ documentRoutes.get("/", async (c) => {
 
 documentRoutes.get("/:id", async (c) => {
   const doc = await getDocumentById(c.get("sql"), c.get("tenant").tenantId, c.req.param("id"));
-  if (!doc) return c.json({ error: "document not found" }, 404);
+  if (!doc) return apiError(c, 404, "NOT_FOUND", "document not found");
   return c.json(doc);
 });
 
@@ -80,19 +82,19 @@ documentRoutes.get("/:id", async (c) => {
 // (see storage.ts) for the streaming route below.
 documentRoutes.get("/:id/download-url", async (c) => {
   const doc = await getDocumentById(c.get("sql"), c.get("tenant").tenantId, c.req.param("id"));
-  if (!doc) return c.json({ error: "document not found" }, 404);
+  if (!doc) return apiError(c, 404, "NOT_FOUND", "document not found");
   const { token, exp } = await signDownloadToken(c.env, doc.storageKey);
   return c.json({ url: `/api/v1/documents/${doc.documentId}/download?token=${token}&exp=${exp}` });
 });
 
 documentRoutes.get("/:id/download", async (c) => {
   const doc = await getDocumentById(c.get("sql"), c.get("tenant").tenantId, c.req.param("id"));
-  if (!doc) return c.json({ error: "document not found" }, 404);
+  if (!doc) return apiError(c, 404, "NOT_FOUND", "document not found");
   const token = c.req.query("token") ?? "";
   const exp = parseInt(c.req.query("exp") ?? "0", 10);
-  if (!(await verifyDownloadToken(c.env, doc.storageKey, token, exp))) return c.json({ error: "invalid or expired download link" }, 403);
+  if (!(await verifyDownloadToken(c.env, doc.storageKey, token, exp))) return apiError(c, 403, "FORBIDDEN", "invalid or expired download link");
   const bytes = await downloadBytes(c.env, doc.storageKey);
-  if (!bytes) return c.json({ error: "file missing from storage" }, 404);
+  if (!bytes) return apiError(c, 404, "NOT_FOUND", "file missing from storage");
   return new Response(bytes, { headers: { "Content-Type": doc.mimeType, "Content-Disposition": `attachment; filename="${doc.originalFilename}"` } });
 });
 
@@ -105,7 +107,7 @@ documentRoutes.patch("/:id/correct", async (c) => {
   const sql = c.get("sql");
   const documentId = c.req.param("id");
   const existing = await getDocumentById(sql, tenant.tenantId, documentId);
-  if (!existing) return c.json({ error: "document not found" }, 404);
+  if (!existing) return apiError(c, 404, "NOT_FOUND", "document not found");
 
   const { reason, ...fields } = await c.req.json();
   const patchable = ["vendorName", "vendorAddress", "documentDate", "invoiceNumber", "rawTotalAmount", "taxAmount", "taxIdentifier"] as const;
@@ -136,4 +138,28 @@ documentRoutes.patch("/:id/correct", async (c) => {
 documentRoutes.get("/:id/audit-log", async (c) => {
   const rows = await listAuditLogForEntity(c.get("sql"), c.get("tenant").tenantId, "DOCUMENT", c.req.param("id"));
   return c.json({ auditLog: rows });
+});
+
+// DELETE /:id — soft delete. Restorable for
+// RETENTION.DOCUMENT_TRASH_GRACE_DAYS (src/retention.ts) via the restore
+// route below; the R2 object and the row itself are only actually
+// removed by the cron purge sweep once that window passes (src/purge.ts).
+documentRoutes.delete("/:id", async (c) => {
+  const tenant = c.get("tenant");
+  const sql = c.get("sql");
+  const id = c.req.param("id");
+  const doc = await softDeleteDocument(sql, tenant.tenantId, id);
+  if (!doc) return apiError(c, 404, "NOT_FOUND", "document not found");
+  await appendAuditLog(sql, { tenantId: tenant.tenantId, entityType: "DOCUMENT", entityId: id, action: "DELETED", actorEmail: tenant.ownerEmail });
+  return c.json({ status: "DELETED" });
+});
+
+documentRoutes.post("/:id/restore", async (c) => {
+  const tenant = c.get("tenant");
+  const sql = c.get("sql");
+  const id = c.req.param("id");
+  const doc = await restoreDocument(sql, tenant.tenantId, id);
+  if (!doc) return apiError(c, 404, "NOT_FOUND", "document not found, or not currently in trash");
+  await appendAuditLog(sql, { tenantId: tenant.tenantId, entityType: "DOCUMENT", entityId: id, action: "RESTORED", actorEmail: tenant.ownerEmail });
+  return c.json(doc);
 });

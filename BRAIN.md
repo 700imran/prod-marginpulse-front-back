@@ -53,6 +53,63 @@
 > Supabase; **Apple OAuth is not yet enabled** (needs a paid Apple
 > Developer account + Services ID — external, not doable via API).
 >
+> ## Backend hardening pass (new — most recent update, read this before anything below)
+>
+> A multi-session pass against `backend-cloudflare/` working through a
+> 32-point production-hardening checklist. **Full detail lives in
+> `backend-cloudflare/STATUS.md` and `backend-cloudflare/NEXT_STEPS.md` —
+> this is a pointer, not a duplicate.** Don't re-derive any of the
+> "Next 10 Tasks" below for `backend-cloudflare/` without checking those
+> two files first; several of those tasks (Sentry, scheduled triggers)
+> are written against the old Go backend and are now **stale** — see
+> the per-item notes right below.
+>
+> **Done this pass, verified (not just written) — see STATUS.md for
+> how each was verified:**
+> - Row-Level Security on every tenant table, plus a non-superuser
+>   `app_user` DB role — `db/schema.sql`, `db/rls_test.sql` (a real,
+>   runnable 10-check proof, re-run against a live local Postgres
+>   several times across this pass, always green)
+> - Usage-based billing: credit wallet/ledger (`src/billing/`), wired
+>   into every metered operation (GST sync, tax-ID verify, bank-account
+>   verify, AI insights) with atomic reserve-before-call /
+>   refund-on-failure
+> - Centralized API error format — `src/errors.ts`, `src/http.ts`, all
+>   49 old ad hoc error responses converted
+> - Data retention & deletion — `src/purge.ts`, `src/retention.ts`:
+>   soft-delete + grace period for both documents and whole tenants,
+>   cron-purged, verified against real Postgres including the full
+>   cross-table cascade
+> - Monitoring (`src/monitoring.ts`) and a real `/healthz` — **supersedes
+>   section H's item 7 below ("wire SENTRY_DSN") for backend-cloudflare**,
+>   though the Sentry delivery path itself still needs live verification
+>   (see that file's own warning — don't assume it's confirmed working)
+> - Backup/recovery runbook (`backend-cloudflare/BACKUP_RECOVERY.md`) —
+>   a procedure, not a completed restore test; no live Supabase project
+>   exists yet to test against
+>
+> **Still open for `backend-cloudflare/` specifically** (don't confuse
+> with the Go-backend items in section H, which are a different list for
+> a backend that may be fully retired):
+> - No automated test suite beyond `db/rls_test.sql` (DB-level tenant
+>   isolation only) — no HTTP-level tests for auth, rate limits, webhook
+>   signatures, file validation
+> - `team_members.role` exists in the schema but isn't enforced anywhere
+>   — every team member currently has identical access regardless of
+>   role (this is the same gap as section H item 3 below, "per-team-
+>   member audit attribution" — still unresolved, just now confirmed
+>   true on the new stack too)
+> - No CI/CD for `backend-cloudflare/` (there is one for the frontend,
+>   per the top banner's "CI/CD" bullet — this is a separate gap)
+> - Domain/DNS readiness — needs real domain access, not code
+> - **Natural-language action layer — not started at all.** This is the
+>   next task; see `backend-cloudflare/WORKFLOW.md` for the design before
+>   writing any code against it. Don't start implementing this from a
+>   cold read of the master prompt alone — WORKFLOW.md already worked
+>   through the safety-boundary questions (what the LLM is and isn't
+>   allowed to trigger directly) that matter most to get right the first
+>   time, given this product handles real financial/tax data.
+
 > ## This pass (frontend visual/branding pass)
 >
 > Scope was deliberately narrow, per explicit instruction: **frontend

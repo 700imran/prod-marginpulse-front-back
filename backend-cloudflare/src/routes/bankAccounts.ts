@@ -5,6 +5,8 @@ import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
 import { createBankAccount, listBankAccounts, getBankAccountById, setPrimaryBankAccount, deleteBankAccount, findByLast4AndIFSC } from "../repository/bankAccounts";
 import { encryptField, last4 } from "../security/fieldEncryption";
+import { reserveForOperation } from "../billing/guard";
+import { apiError } from "../http";
 
 export const bankAccountRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
@@ -21,11 +23,12 @@ bankAccountRoutes.get("/", async (c) => {
 bankAccountRoutes.post("/", async (c) => {
   const { bank_name: bankName, account_holder_name: accountHolderName, account_number: accountNumber, ifsc_code: ifscCode, account_type } = await c.req.json();
   if (!bankName || !accountHolderName || !accountNumber || !ifscCode) {
-    return c.json({ error: "bank_name, account_holder_name, account_number, and ifsc_code are required" }, 400);
+    return apiError(c, 400, "VALIDATION_ERROR", "bank_name, account_holder_name, account_number, and ifsc_code are required");
   }
-  if (!IFSC_PATTERN.test(ifscCode)) return c.json({ error: "Invalid IFSC code format" }, 400);
+  if (!IFSC_PATTERN.test(ifscCode)) return apiError(c, 400, "VALIDATION_ERROR", "Invalid IFSC code format");
 
-  const tenantId = c.get("tenant").tenantId;
+  const tenant = c.get("tenant");
+  const tenantId = tenant.tenantId;
   const sql = c.get("sql");
   const accountLast4 = last4(accountNumber);
 
@@ -39,17 +42,30 @@ bankAccountRoutes.post("/", async (c) => {
     ifscCode, accountType: account_type || "CURRENT",
   });
 
-  await c.env.BANK_ACCOUNT_QUEUE.send({ task: "verify_bank_account_task", job_id: crypto.randomUUID(), args: { tenant_id: tenantId, bank_account_id: item.bankAccountId } });
+  // The account record itself is stored either way — only the paid
+  // verification call is gated by credits. If credits are short, the
+  // account just stays PENDING (its default) until /reverify-style credit
+  // becomes available; there's no reverify endpoint for bank accounts yet,
+  // so for now this only degrades gracefully for a low/empty wallet rather
+  // than blocking account creation.
+  const jobId = crypto.randomUUID();
+  const reservation = await reserveForOperation(sql, tenant, "BANK_ACCOUNT_VERIFY", jobId);
+  if (reservation.ok) {
+    await c.env.BANK_ACCOUNT_QUEUE.send({
+      task: "verify_bank_account_task", job_id: jobId, args: { tenant_id: tenantId, bank_account_id: item.bankAccountId },
+      credit_reservation: { tenant_id: tenantId, operation: "BANK_ACCOUNT_VERIFY", amount: reservation.amount },
+    });
+  }
 
   const { accountNumberEncrypted: _drop, ...out } = item;
-  return c.json(out, 201);
+  return c.json({ ...out, credits_remaining: reservation.ok ? reservation.balanceAfter : undefined }, 201);
 });
 
 bankAccountRoutes.post("/:id/set-primary", async (c) => {
   const tenantId = c.get("tenant").tenantId;
   const id = c.req.param("id");
   const existing = await getBankAccountById(c.get("sql"), tenantId, id);
-  if (!existing) return c.json({ error: "bank account not found" }, 404);
+  if (!existing) return apiError(c, 404, "NOT_FOUND", "bank account not found");
 
   await setPrimaryBankAccount(c.get("sql"), tenantId, id);
   const updated = await getBankAccountById(c.get("sql"), tenantId, id);
@@ -61,7 +77,7 @@ bankAccountRoutes.delete("/:id", async (c) => {
   const tenantId = c.get("tenant").tenantId;
   const id = c.req.param("id");
   const existing = await getBankAccountById(c.get("sql"), tenantId, id);
-  if (!existing) return c.json({ error: "bank account not found" }, 404);
+  if (!existing) return apiError(c, 404, "NOT_FOUND", "bank account not found");
 
   await deleteBankAccount(c.get("sql"), tenantId, id);
   return c.body(null, 204);

@@ -12,7 +12,24 @@ is optional unless marked "(optional)".
 - [ ] Create a Supabase project (or use an existing one).
 - [ ] Run `db/schema.sql` against it — SQL Editor, or `psql` on the
       **direct** connection string (port 5432), not the pooler. DDL
-      and pgbouncer's transaction mode don't get along.
+      and pgbouncer's transaction mode don't get along. This also
+      creates the `app_user` role that Row-Level Security depends on
+      (see the next step — do not skip it).
+- [ ] **Set `app_user`'s password and verify RLS actually works before
+      going further.** `db/schema.sql` creates the role with no
+      password on purpose, so a real one is never sitting in a file
+      that gets committed:
+      ```sql
+      alter role app_user with password '<generate a strong random value>';
+      ```
+      Run that directly in the SQL Editor or via `psql` — not from a
+      file you save. Then run the automated proof:
+      ```
+      psql "<direct connection string, as the postgres/owner role>" \
+           -v ON_ERROR_STOP=1 -f db/rls_test.sql
+      ```
+      It should end with `ALL RLS TESTS PASSED`. If it doesn't, stop —
+      don't proceed to Phase B with broken tenant isolation.
 - [ ] Authentication > Providers: enable **Email** (for
       signUp/signInWithPassword).
 - [ ] Authentication > Providers: enable **Google** and **Apple** if
@@ -34,12 +51,20 @@ is optional unless marked "(optional)".
       `wrangler login`.
 - [ ] Create the R2 bucket: `wrangler r2 bucket create marginpulse-documents`
 - [ ] Create Hyperdrive, pointed at the Supabase pooler string from
-      Phase A:
+      Phase A — **as `app_user`, not `postgres`.** Connecting as
+      `postgres` (a superuser) silently makes every RLS policy in
+      `db/schema.sql` a no-op; this is the single most common way to
+      "turn on RLS" and have it do nothing:
       ```
       wrangler hyperdrive create marginpulse-db \
-        --connection-string="postgres://postgres.<ref>:<password>@aws-0-<region>.pooler.supabase.com:6543/postgres"
+        --connection-string="postgres://app_user:<password from Phase A>@aws-0-<region>.pooler.supabase.com:6543/postgres"
       ```
-      Copy the returned `id` into `wrangler.toml`'s
+      Supabase's shared pooler sometimes expects the username as
+      `app_user.<project-ref>` rather than plain `app_user` (the same
+      convention it uses for `postgres.<project-ref>`) — check
+      Settings > Database > Connection Pooling for the exact format
+      your project expects once `app_user` exists, don't assume. Copy
+      the returned Hyperdrive `id` into `wrangler.toml`'s
       `[[hyperdrive]] id = "..."` line.
 - [ ] Create the 5 queues + 5 dead-letter queues (10 total):
       ```
@@ -128,6 +153,10 @@ accuracy on messy documents hasn't been checked — see
       confirm: R2 has the object, the OCR queue receives a message,
       and (once the consumer runs) the document ends up `PARSED` with
       extracted fields.
+- [ ] Sign up two separate test users (two tenants) and confirm one
+      cannot see the other's documents/dashboard through the API —
+      the manual, over-HTTP complement to `db/rls_test.sql`'s
+      database-level proof from Phase A.
 
 ## Phase F — Frontend changes (required, not optional)
 
@@ -204,6 +233,51 @@ a task list, not just prose:
       packages (from the very first finding in this conversation) —
       worth fixing if you ever need the Go version as a reference
       again.
+- [ ] New: usage-based billing (`src/billing/`) has no real pricing yet
+      — `src/billing/pricing.ts`'s plan allowances and per-operation
+      credit costs are placeholder guesses. Set real numbers before
+      charging anyone.
+- [ ] New: no credit purchase/top-up flow. The ledger and wallet
+      schema support a `PURCHASE` entry type; nothing calls it yet —
+      needs a Razorpay/Stripe checkout wired to `reserveCredits`'s
+      sibling (add a `purchaseCredits` function in
+      `src/billing/credits.ts` when you build this).
+- [ ] New: the frontend doesn't know about credits at all — no balance
+      display, no handling of the new `402 INSUFFICIENT_CREDITS`
+      response shape from `/gst/sync`, `/tax-identifiers`,
+      `/bank-accounts`.
+- [ ] New: error responses changed shape (see STATUS.md's "Centralized
+      API error format" section) — same HTTP status codes as before,
+      but the JSON body is now `{success, error: {code, message,
+      requestId, details?}}` instead of each route's own ad hoc
+      `{error: "..."}`. The frontend needs updating wherever it reads
+      `err.error` as a string, and `credits_remaining` moved under
+      `error.details` for the two `INSUFFICIENT_CREDITS` responses.
+- [ ] New: no repository/pipeline code throws `AppError` yet — every
+      route still does its own `if (!x) return apiError(...)` check.
+      Worth doing where a failure can happen several calls deep and
+      currently has to be checked-and-rethrown at every level between
+      there and the route.
+- [ ] New: soft-deleted documents (`deleted_at`) are only excluded from
+      `listDocumentsByTenant`/`countDocumentsByTenant`. Reconciliation
+      matching, GST cross-checks, and CSV/export queries in
+      `repository/documents.ts` still include them — close this before
+      a real user notices a "deleted" invoice still affecting their
+      numbers.
+- [ ] New: no orphan-file reconciliation between R2 and Postgres — the
+      retention purge (`src/purge.ts`) only cleans up objects it can
+      reach through a `documents`/`tenants` row. An R2 object left
+      behind by some partial-failure upload path (upload succeeded,
+      the following DB insert didn't) has no cleanup path yet.
+- [ ] New: the purge job has no dry-run mode and no alerting beyond a
+      `console.error` on failure — a tenant or document that fails to
+      purge keeps retrying silently, once a day, forever.
+- [ ] Still open: the queue consumer's per-message DB round trips for
+      usage-event logging (see `queue/consumer.ts`) go through the same
+      `max:1` Hyperdrive connection as everything else in this pass —
+      fine at this app's current volume, worth revisiting only if a
+      single batch's usage-event writes ever become a throughput
+      bottleneck.
 
 ## Quick file map
 
@@ -213,5 +287,9 @@ a task list, not just prose:
 | A DB query | `src/repository/<entity>.ts` |
 | Reconciliation/OCR/GST logic | `src/pipelines/<name>.ts` |
 | A background job | `src/queue/consumer.ts` |
+| Usage credits / pricing | `src/billing/pricing.ts` (numbers), `src/billing/credits.ts` (logic) |
+| Tenant isolation / RLS | `db/schema.sql` (policies), `src/security/tenantContext.ts` (session vars), `db/rls_test.sql` (proof) |
+| API error format | `src/errors.ts` (codes, AppError), `src/http.ts` (apiError helper) |
+| Retention / deletion | `src/retention.ts` (grace periods), `src/purge.ts` (purge logic) |
 | Auth/tenant loading | `src/auth/supabase.ts`, `src/middleware/auth.ts` |
 | Schema | `db/schema.sql` (re-run changes manually — no migration tool is set up) |

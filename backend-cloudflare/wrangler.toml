@@ -77,6 +77,42 @@ max_batch_size = 5
 max_retries = 3
 dead_letter_queue = "bank-account-queue-dlq"
 
+# ---------------------------------------------------------------------------
+# Dead-letter queue consumers — same Worker, same queue() export
+# (src/index.ts), routed by batch.queue at runtime (see
+# queue/consumer.ts's handleDeadLetterBatch). Without these, a
+# permanently-failed job that had reserved usage credits would never get
+# refunded — the message would just sit in the DLQ unseen. No further
+# dead_letter_queue is set here on purpose: handleDeadLetterBatch always
+# acks (it try/catches its own refund logic), so retries on these should
+# be rare; if one is ever truly unprocessable, dropping it after a few
+# tries is preferable to looping forever with nowhere further to go.
+# ---------------------------------------------------------------------------
+[[queues.consumers]]
+queue = "ocr-queue-dlq"
+max_batch_size = 10
+max_retries = 3
+
+[[queues.consumers]]
+queue = "reconcile-queue-dlq"
+max_batch_size = 10
+max_retries = 3
+
+[[queues.consumers]]
+queue = "gst-queue-dlq"
+max_batch_size = 10
+max_retries = 3
+
+[[queues.consumers]]
+queue = "tax-identifier-queue-dlq"
+max_batch_size = 10
+max_retries = 3
+
+[[queues.consumers]]
+queue = "bank-account-queue-dlq"
+max_batch_size = 10
+max_retries = 3
+
 
 # ---------------------------------------------------------------------------
 # Cron Triggers — replaces the never-built EventBridge rules from ROADMAP.md

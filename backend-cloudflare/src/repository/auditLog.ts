@@ -34,3 +34,15 @@ export async function listAuditLogForEntity(sql: Sql, tenantId: string, entityTy
     order by created_at desc
   `;
 }
+
+// Retention purge (src/purge.ts) — audit_log rows carry no secrets (see
+// this file's own values: field_name/old_value/new_value are business
+// data, never passwords/tokens/OTPs), so this is a plain age-based
+// delete, no per-row inspection needed. Runs under system_context, same
+// as the rest of the cron sweep — this is intentionally cross-tenant in
+// one statement rather than tenant-by-tenant, since there's no per-row
+// action to take other than deleting it.
+export async function purgeOldAuditLogs(sql: Sql, olderThan: Date): Promise<number> {
+  const result = await sql`delete from audit_log where created_at <= ${olderThan.toISOString()}`;
+  return result.count;
+}

@@ -5,6 +5,8 @@ import { getTenantByWhatsAppPhone, getTenantByIngestEmailAlias } from "../reposi
 import { createDocument } from "../repository/documents";
 import { uploadBytes } from "../storage";
 import { verifyMetaSignature256 } from "../security/hmac";
+import { setTenantContext, setPrivilegedContext } from "../security/tenantContext";
+import { apiError } from "../http";
 
 // Unauthenticated by nature — these are called by Meta/an email relay,
 // not by a logged-in tenant. Mounted separately in src/index.ts (not
@@ -23,7 +25,7 @@ webhookRoutes.get("/whatsapp", (c) => {
   if (q["hub.mode"] === "subscribe" && q["hub.verify_token"] === c.env.WHATSAPP_VERIFY_TOKEN) {
     return c.text(q["hub.challenge"] ?? "");
   }
-  return c.json({ error: "Verification failed" }, 403);
+  return apiError(c, 403, "FORBIDDEN", "Verification failed");
 });
 
 interface WAMessage {
@@ -54,7 +56,7 @@ webhookRoutes.post("/whatsapp", async (c) => {
     const valid = await verifyMetaSignature256(c.env.WHATSAPP_APP_SECRET, rawBody, c.req.header("X-Hub-Signature-256") ?? null);
     if (!valid) {
       console.warn("whatsapp webhook: signature verification failed, rejecting");
-      return c.json({ error: "Invalid signature" }, 401);
+      return apiError(c, 401, "UNAUTHENTICATED", "Invalid signature");
     }
   } else {
     console.warn("whatsapp webhook: WHATSAPP_APP_SECRET not configured, accepting without signature verification");
@@ -64,7 +66,7 @@ webhookRoutes.post("/whatsapp", async (c) => {
   try {
     payload = JSON.parse(rawBody);
   } catch {
-    return c.json({ error: "invalid JSON body" }, 400);
+    return apiError(c, 400, "VALIDATION_ERROR", "invalid JSON body");
   }
   const sql = c.get("sql");
 
@@ -76,11 +78,21 @@ webhookRoutes.post("/whatsapp", async (c) => {
         else if (msg.image) (({ id: mediaId, mime_type: mimeType } = msg.image), (filename = "whatsapp-image"));
         else continue;
 
+        // The phone number isn't a tenant yet as far as RLS is concerned
+        // — this lookup has to see across every tenant to find which one
+        // owns it. system_context is narrowly on for exactly this one
+        // query (the signature check above is what makes that safe: only
+        // a request Meta actually signed gets here), then immediately
+        // off again so everything else in this iteration is scoped to
+        // the one resolved tenant like any other request.
+        await setPrivilegedContext(sql, { system: true });
         const tenant = await getTenantByWhatsAppPhone(sql, msg.from);
+        await setPrivilegedContext(sql, { system: false });
         if (!tenant) {
           console.warn("whatsapp message from unbound number", { from: msg.from });
           continue;
         }
+        await setTenantContext(sql, tenant.tenantId);
 
         const media = await downloadWhatsAppMedia(c.env, mediaId).catch((e) => {
           console.error("whatsapp media download failed", { error: e.message, mediaId });
@@ -106,14 +118,21 @@ webhookRoutes.post("/whatsapp", async (c) => {
 
 webhookRoutes.post("/email-ingest", async (c) => {
   if (c.env.WEBHOOK_INGEST_SECRET) {
-    if (c.req.header("X-Webhook-Secret") !== c.env.WEBHOOK_INGEST_SECRET) return c.json({ error: "Invalid webhook secret" }, 401);
+    if (c.req.header("X-Webhook-Secret") !== c.env.WEBHOOK_INGEST_SECRET) return apiError(c, 401, "UNAUTHENTICATED", "Invalid webhook secret");
   }
 
   const payload = await c.req.json<{ to: string; from: string; attachments: { filename: string; content_type: string; content_base64: string }[] }>();
   const alias = extractEmailAlias(payload.to);
   const sql = c.get("sql");
+  // Same reasoning as the WhatsApp handler above: this lookup has to see
+  // across every tenant, narrowly and briefly, to find which one owns
+  // this ingest alias. The X-Webhook-Secret check above is what makes
+  // that safe.
+  await setPrivilegedContext(sql, { system: true });
   const tenant = await getTenantByIngestEmailAlias(sql, alias);
-  if (!tenant) return c.json({ error: "No tenant bound to this ingest address" }, 404);
+  await setPrivilegedContext(sql, { system: false });
+  if (!tenant) return apiError(c, 404, "NOT_FOUND", "No tenant bound to this ingest address");
+  await setTenantContext(sql, tenant.tenantId);
 
   let queued = 0;
   for (const att of payload.attachments ?? []) {

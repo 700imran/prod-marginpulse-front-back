@@ -1,7 +1,12 @@
 // Exact port of internal/pipelines/insights/insights.go. Same
 // rule-based fallback, same prompt, same budget-check-before-call flow.
 import type { Env } from "../config";
+import type { Sql } from "../db";
+import type { TenantContext } from "../auth/supabase";
 import { checkAndIncrementAIBudget } from "../ratelimit";
+import { reserveForOperation } from "../billing/guard";
+import { refundCredits } from "../billing/credits";
+import { recordUsageEvent } from "../billing/usage";
 
 const SYSTEM_PROMPT = `You are a plain-English financial summariser for small business owners.
 Your job is to convert raw reconciliation data into a single, clear, jargon-free paragraph
@@ -26,16 +31,25 @@ export interface SummaryData {
   period: string;
 }
 
-export async function generateInsight(env: Env, data: SummaryData, tenantId: string): Promise<string> {
+export async function generateInsight(sql: Sql, env: Env, data: SummaryData, tenant: TenantContext): Promise<string> {
   if (!env.ANTHROPIC_API_KEY) return ruleBasedInsight(data);
+  if (!tenant?.tenantId) return ruleBasedInsight(data);
 
-  if (tenantId) {
-    // ~$0.01 per call is a rough estimate for an 80-word completion on a
-    // small prompt — config.go didn't hardcode a per-call cost either,
-    // it just gated on token/request counters; adjust if you want a
-    // tighter estimate once you see real Anthropic usage costs.
-    const { allowed } = await checkAndIncrementAIBudget(env, 0.01);
-    if (!allowed) return ruleBasedInsight(data);
+  // Two independent guards, protecting two different things. The tenant
+  // credit reservation below protects per-tenant fairness/billing — one
+  // tenant's dashboard views can't eat another tenant's allowance.
+  // checkAndIncrementAIBudget protects the platform's own daily Anthropic
+  // bill regardless of which tenant is asking. Both must pass for a paid
+  // call to happen; either one failing degrades to the free rule-based
+  // insight below — this is a dashboard summary, never worth a hard error.
+  const jobId = crypto.randomUUID();
+  const reservation = await reserveForOperation(sql, tenant, "AI_INSIGHT", jobId);
+  if (!reservation.ok) return ruleBasedInsight(data);
+
+  const { allowed } = await checkAndIncrementAIBudget(env, 0.01);
+  if (!allowed) {
+    await refundCredits(sql, { tenantId: tenant.tenantId, amount: reservation.amount, operation: "AI_INSIGHT", jobId, description: "Refund: platform-wide daily AI budget exhausted" }).catch(() => {});
+    return ruleBasedInsight(data);
   }
 
   const period = data.period || "current period";
@@ -57,8 +71,14 @@ Write the plain-English summary.`;
   const maxTokens = Math.min(parseInt(env.LLM_MAX_TOKENS, 10), parseInt(env.AI_MAX_COMPLETION_TOKENS, 10));
 
   try {
-    return await callAnthropic(env, trimmedMessage, maxTokens);
+    const result = await callAnthropic(env, trimmedMessage, maxTokens);
+    await recordUsageEvent(sql, { tenantId: tenant.tenantId, provider: "ANTHROPIC", operation: "AI_INSIGHT", outcome: "SUCCESS", creditsConsumed: reservation.amount, correlationId: jobId, jobId }).catch(() => {});
+    return result;
   } catch {
+    // The call failed — the tenant got no value from it, so refund the
+    // reservation rather than charging for a failed attempt.
+    await refundCredits(sql, { tenantId: tenant.tenantId, amount: reservation.amount, operation: "AI_INSIGHT", jobId, description: "Refund: Anthropic call failed" }).catch(() => {});
+    await recordUsageEvent(sql, { tenantId: tenant.tenantId, provider: "ANTHROPIC", operation: "AI_INSIGHT", outcome: "REFUNDED", creditsConsumed: -reservation.amount, correlationId: jobId, jobId }).catch(() => {});
     return ruleBasedInsight(data);
   }
 }

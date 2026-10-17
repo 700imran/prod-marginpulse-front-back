@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { Env } from "../config";
+import { apiError } from "../http";
 
 // Deliberately unauthenticated — no requireAuth here, matching the Go
 // original's own comment: meant to sit on the public marketing site as
@@ -16,7 +17,7 @@ function round2(v: number): number {
 
 roiRoutes.post("/", async (c) => {
   const req = await c.req.json().catch(() => null);
-  if (!req) return c.json({ error: "Invalid request body" }, 400);
+  if (!req) return apiError(c, 400, "VALIDATION_ERROR", "Invalid request body");
 
   const monthlyInvoiceVolume = Number(req.monthly_invoice_volume ?? 0);
   const avgInvoiceValueINR = Number(req.avg_invoice_value_inr ?? 0);
@@ -25,7 +26,7 @@ roiRoutes.post("/", async (c) => {
   const monthlyPlanPriceINR = Number(req.monthly_plan_price_inr ?? 0);
 
   if ([monthlyInvoiceVolume, avgInvoiceValueINR, hoursSpentManuallyPerMonth, hourlyCostINR, monthlyPlanPriceINR].some((v) => v < 0)) {
-    return c.json({ error: "Inputs must be non-negative" }, 422);
+    return apiError(c, 422, "VALIDATION_ERROR", "Inputs must be non-negative");
   }
 
   const gstRate = req.avg_gst_rate_percent != null ? Number(req.avg_gst_rate_percent) : 18.0;

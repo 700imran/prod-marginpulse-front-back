@@ -6,6 +6,8 @@ import { requireAuth, requirePlatformAdmin } from "../middleware/auth";
 import { getPlatformSettings, updatePlatformSettings, getSlackAppConfig, setSlackAppConfig, type PlatformSettings } from "../repository/platformSettings";
 import { listAllTenants, setTenantActive, countTenants, getTenantById } from "../repository/tenants";
 import { encryptField } from "../security/fieldEncryption";
+import { apiError } from "../http";
+import { purgeTenantNow } from "../purge";
 
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
@@ -83,7 +85,7 @@ adminRoutes.patch("/tenants/:id/active", async (c) => {
   const tenantId = c.req.param("id");
   await setTenantActive(c.get("sql"), tenantId, Boolean(is_active));
   const updated = await getTenantById(c.get("sql"), tenantId);
-  if (!updated) return c.json({ error: "tenant not found" }, 404);
+  if (!updated) return apiError(c, 404, "NOT_FOUND", "tenant not found");
   return c.json(updated);
 });
 
@@ -94,4 +96,23 @@ adminRoutes.get("/stats", async (c) => {
   const active = items.filter((t) => t.isActive).length;
   const total = await countTenants(sql);
   return c.json({ total_tenants: total, active_tenants: active, suspended_count: items.length - active });
+});
+
+// POST /admin/tenants/:id/purge-now — immediate, irreversible deletion
+// for a compliance/support request that can't wait for the normal
+// deletion grace period (RETENTION.TENANT_DELETION_GRACE_DAYS). Runs the
+// exact same purge logic as the cron sweep in src/purge.ts, not a
+// separate implementation. Requires the caller to echo back the tenant's
+// own id as `confirm` — a deliberate speed bump against a mistyped path
+// param on the platform's single most destructive endpoint.
+adminRoutes.post("/tenants/:id/purge-now", async (c) => {
+  const tenantId = c.req.param("id");
+  const { confirm } = await c.req.json().catch(() => ({}) as { confirm?: string });
+  if (confirm !== tenantId) {
+    return apiError(c, 400, "VALIDATION_ERROR", "Send { \"confirm\": \"<tenant_id>\" } in the body to proceed — this permanently deletes the tenant and everything it owns.");
+  }
+  const admin = c.get("tenant");
+  console.warn("admin_forced_tenant_purge", { tenantId, requestedBy: admin.ownerEmail });
+  await purgeTenantNow(c.get("sql"), c.env, tenantId);
+  return c.json({ status: "PURGED", tenant_id: tenantId });
 });

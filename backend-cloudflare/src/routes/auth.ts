@@ -3,8 +3,11 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
-import { updateTenantProfile } from "../repository/tenants";
+import { updateTenantProfile, requestTenantDeletion, cancelTenantDeletion } from "../repository/tenants";
 import { appendAuditLog } from "../repository/auditLog";
+import { sendAccountDeletionScheduled, sendAccountDeletionCancelled } from "../email";
+import { apiError } from "../http";
+import { RETENTION } from "../retention";
 
 // What used to be here in auth_handlers.go — HandleRegister, HandleLogin,
 // HandleRefresh, HandleLogout, HandleChangePassword — is gone. The
@@ -31,4 +34,44 @@ authRoutes.patch("/me", async (c) => {
     actorEmail: tenant.ownerEmail,
   });
   return c.json(updated);
+});
+
+// DELETE /me — request account deletion. Reversible for
+// RETENTION.TENANT_DELETION_GRACE_DAYS (src/retention.ts); the account
+// stays fully usable during that window (see db/schema.sql's comment on
+// tenants.deletion_requested_at). The cron sweep in index.ts actually
+// deletes everything once the grace period elapses — see src/purge.ts.
+authRoutes.delete("/me", async (c) => {
+  const sql = c.get("sql");
+  const tenant = c.get("tenant");
+  if (tenant.deletionRequestedAt) {
+    return apiError(c, 409, "CONFLICT", "Account deletion is already scheduled");
+  }
+  await requestTenantDeletion(sql, tenant.tenantId);
+  const purgeDate = new Date(Date.now() + RETENTION.TENANT_DELETION_GRACE_DAYS * 24 * 60 * 60 * 1000);
+  await appendAuditLog(sql, {
+    tenantId: tenant.tenantId, entityType: "TENANT", entityId: tenant.tenantId,
+    action: "DELETION_REQUESTED", actorEmail: tenant.ownerEmail,
+  });
+  await sendAccountDeletionScheduled(c.env, tenant.ownerEmail, tenant.businessName, purgeDate.toDateString()).catch((e) =>
+    console.error("deletion_scheduled_email_failed", { tenantId: tenant.tenantId, error: (e as Error).message }),
+  );
+  return c.json({ status: "DELETION_SCHEDULED", purge_date: purgeDate.toISOString() });
+});
+
+authRoutes.post("/me/cancel-deletion", async (c) => {
+  const sql = c.get("sql");
+  const tenant = c.get("tenant");
+  if (!tenant.deletionRequestedAt) {
+    return apiError(c, 400, "VALIDATION_ERROR", "No account deletion is currently scheduled");
+  }
+  await cancelTenantDeletion(sql, tenant.tenantId);
+  await appendAuditLog(sql, {
+    tenantId: tenant.tenantId, entityType: "TENANT", entityId: tenant.tenantId,
+    action: "DELETION_CANCELLED", actorEmail: tenant.ownerEmail,
+  });
+  await sendAccountDeletionCancelled(c.env, tenant.ownerEmail, tenant.businessName).catch((e) =>
+    console.error("deletion_cancelled_email_failed", { tenantId: tenant.tenantId, error: (e as Error).message }),
+  );
+  return c.json({ status: "ACTIVE" });
 });

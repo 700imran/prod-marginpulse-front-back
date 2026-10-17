@@ -47,6 +47,7 @@ export interface Env {
   WHATSAPP_APP_SECRET: string;        // Meta App Secret — verifies X-Hub-Signature-256 on inbound webhooks; empty = unverified fallback (logged)
   WHATSAPP_API_VERSION: string;       // e.g. "v19.0"
   WEBHOOK_INGEST_SECRET: string;      // shared secret checked against X-Webhook-Secret on the email-ingest webhook
+  SENTRY_DSN: string;                 // optional — empty string disables Sentry reporting entirely; see src/monitoring.ts
 }
 
 export function isProd(env: Env): boolean {

@@ -303,3 +303,216 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute procedure public.handle_new_auth_user();
+
+-- ============================================================================
+-- Usage-based billing — separates the SaaS subscription (tenants.plan_tier
+-- above) from metered usage of expensive external APIs (GST portal, bank
+-- verification, AI insights). See src/billing/ for the code that reads and
+-- writes these tables; that's also where the credit-cost-per-operation and
+-- allowance-per-plan numbers live (src/billing/pricing.ts) — nothing here
+-- hardcodes a price.
+--
+-- credit_wallets — one row per tenant: current balance, whether overage
+--   (spending past zero) is allowed, and the current monthly period.
+-- credit_ledger  — append-only, immutable log of every balance change.
+--   Every entry carries a unique (tenant_id, idempotency_key) so a retried
+--   HTTP request or a redelivered queue message can never double-charge or
+--   double-refund — see src/billing/credits.ts for how that's enforced.
+-- usage_events   — a record of every metered call *attempt*, including ones
+--   denied for insufficient credits. Not a source of truth for the wallet
+--   balance (credit_ledger is) — this is the observability/analytics side.
+-- ============================================================================
+create table if not exists public.credit_wallets (
+  tenant_id                  uuid primary key references public.tenants(tenant_id) on delete cascade,
+  balance_credits            numeric(14,4) not null default 0,
+  overage_allowed            boolean not null default false,
+  monthly_allowance_credits  numeric(14,4) not null default 0,
+  current_period_start       date not null default date_trunc('month', now())::date,
+  low_balance_notified_at    timestamptz,
+  created_at                 timestamptz not null default now(),
+  updated_at                 timestamptz not null default now(),
+  constraint chk_wallet_balance_nonneg check (overage_allowed or balance_credits >= 0)
+);
+
+create table if not exists public.credit_ledger (
+  ledger_id       uuid primary key default gen_random_uuid(),
+  tenant_id       uuid not null references public.tenants(tenant_id) on delete cascade,
+  entry_type      text not null check (entry_type in ('RESERVE','REFUND','ADJUSTMENT','PURCHASE','MONTHLY_GRANT')),
+  amount_credits  numeric(14,4) not null,        -- signed: negative = removed from wallet, positive = added
+  balance_after   numeric(14,4) not null,
+  operation       text not null,                 -- e.g. 'GST_SYNC', 'BANK_ACCOUNT_VERIFY', 'AI_INSIGHT'
+  reference_type  text,                           -- e.g. 'job'
+  reference_id    text,                           -- job_id / entity id this entry relates to
+  idempotency_key text not null,                  -- e.g. 'reserve:<job_id>' — enforces exactly-once processing
+  correlation_id  text,
+  description     text,
+  created_by      text not null default 'system',
+  created_at      timestamptz not null default now(),
+  unique (tenant_id, idempotency_key)
+);
+create index if not exists idx_credit_ledger_tenant_created on public.credit_ledger (tenant_id, created_at desc);
+
+create table if not exists public.usage_events (
+  usage_event_id     uuid primary key default gen_random_uuid(),
+  tenant_id          uuid not null references public.tenants(tenant_id) on delete cascade,
+  provider           text not null,               -- 'GST_API','BANK_VERIFY_API','ANTHROPIC', etc.
+  operation          text not null,                -- 'GST_SYNC','TAX_IDENTIFIER_VERIFY','BANK_ACCOUNT_VERIFY','AI_INSIGHT'
+  outcome            text not null check (outcome in ('SUCCESS','FAILED','REFUNDED')),
+  credits_consumed   numeric(14,4) not null default 0,
+  correlation_id     text not null,
+  job_id             text,
+  created_at         timestamptz not null default now()
+);
+create index if not exists idx_usage_events_tenant_created on public.usage_events (tenant_id, created_at desc);
+
+-- Backfill: one wallet row per tenant that already existed when this
+-- migration (re-)ran, so reserveCredits() never has to special-case a
+-- missing wallet for a pre-existing tenant. New tenants get a wallet
+-- lazily on first use (see ensureWallet() in src/billing/credits.ts).
+insert into public.credit_wallets (tenant_id)
+select tenant_id from public.tenants
+on conflict (tenant_id) do nothing;
+
+-- ============================================================================
+-- Row-Level Security — defense-in-depth for tenant isolation.
+--
+-- Every application query already filters `WHERE tenant_id = ?` at the
+-- repository layer (src/repository/*.ts) — that has NOT changed and
+-- remains the primary correctness mechanism. RLS is a second, independent
+-- layer: if a future repository function ever forgets that filter, or a
+-- bug supplies the wrong tenant_id, the database itself still refuses to
+-- return or modify another tenant's rows. db/rls_test.sql has an
+-- automated, runnable proof of exactly that — run it against any
+-- Postgres this file has been applied to (including a throwaway local
+-- one) before trusting this section actually protects anything.
+--
+-- THIS ONLY PROTECTS ANYTHING IF THE WORKER CONNECTS AS A NON-SUPERUSER,
+-- NON-BYPASSRLS ROLE. Superusers and BYPASSRLS roles ignore every policy
+-- below, full stop — FORCE ROW LEVEL SECURITY notwithstanding. That
+-- includes Supabase's default `postgres` role, which is what most
+-- Hyperdrive connection strings use out of the box. See NEXT_STEPS.md's
+-- RLS section for the one-time step of switching the Hyperdrive
+-- connection string to the `app_user` role created below — until that
+-- switch is made, everything in this section is inert (harmless, but
+-- providing zero actual protection).
+--
+-- Three session variables, set by application code
+-- (src/security/tenantContext.ts) rather than derived from anything a
+-- client sends directly — see that file for exactly where each is set:
+--   app.tenant_id         — set for every authenticated request and
+--                            queue task to the one tenant it's allowed
+--                            to touch.
+--   app.is_platform_admin — set true/false from the verified tenant's
+--                            own is_platform_admin column, on every
+--                            request (middleware/auth.ts). routes/
+--                            admin.ts's requirePlatformAdmin remains the
+--                            actual gate on which routes reach here; this
+--                            is a second layer, not a replacement.
+--   app.system_context    — set narrowly and briefly, only around
+--                            specific trusted server-only operations that
+--                            aren't naturally scoped to one caller's
+--                            tenant: resolving which tenant a WhatsApp/
+--                            email webhook or an invite-token redemption
+--                            belongs to (authorized by a signature,
+--                            shared secret, or the token itself — never
+--                            by tenant_id), and the daily cron sweep that
+--                            must enumerate every tenant. Never set from
+--                            a code path a client can reach without
+--                            first passing that check.
+-- ============================================================================
+
+create or replace function public.app_current_tenant_id() returns uuid
+language sql stable as $$
+  select nullif(current_setting('app.tenant_id', true), '')::uuid
+$$;
+
+create or replace function public.app_is_privileged() returns boolean
+language sql stable as $$
+  select coalesce(nullif(current_setting('app.is_platform_admin', true), ''), 'false')::boolean
+      or coalesce(nullif(current_setting('app.system_context', true), ''), 'false')::boolean
+$$;
+
+-- One non-superuser, non-BYPASSRLS role for the Worker's Hyperdrive
+-- connection. Created with no password — set one with
+-- `ALTER ROLE app_user WITH PASSWORD '...'` run directly against your
+-- Supabase project (SQL Editor or psql), never committed to this file.
+do $$
+begin
+  if not exists (select from pg_roles where rolname = 'app_user') then
+    create role app_user with login nosuperuser nobypassrls noreplication nocreatedb nocreaterole;
+  end if;
+end
+$$;
+grant usage on schema public to app_user;
+grant select, insert, update, delete on all tables in schema public to app_user;
+grant execute on function public.app_current_tenant_id() to app_user;
+grant execute on function public.app_is_privileged() to app_user;
+
+-- Standard tenant-isolation policy, applied identically to every
+-- tenant-owned table. One shared name ("tenant_isolation") per table
+-- keeps this idempotent (drop-and-recreate) across repeated runs of this
+-- file, same convention as the rest of the file's `create ... if not
+-- exists`/`create or replace`.
+do $$
+declare
+  t text;
+begin
+  foreach t in array array[
+    'tenants', 'documents', 'bank_transactions', 'tax_identifiers', 'bank_accounts',
+    'team_members', 'anomalies', 'audit_log', 'reconciliation_settings',
+    'notification_settings', 'integration_settings', 'integrations',
+    'credit_wallets', 'credit_ledger', 'usage_events'
+  ]
+  loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('alter table public.%I force row level security', t);
+    execute format('drop policy if exists tenant_isolation on public.%I', t);
+    execute format(
+      'create policy tenant_isolation on public.%I for all using (tenant_id = public.app_current_tenant_id() or public.app_is_privileged()) with check (tenant_id = public.app_current_tenant_id() or public.app_is_privileged())',
+      t
+    );
+  end loop;
+end
+$$;
+
+-- platform_settings has no tenant_id (it's a single global row) — any
+-- authenticated connection may read it (needed for e.g. the Slack OAuth
+-- connect flow, which any tenant can use to reach the platform's shared
+-- Slack app credentials), but only a platform admin or trusted system
+-- code may write to it.
+alter table public.platform_settings enable row level security;
+alter table public.platform_settings force row level security;
+drop policy if exists platform_settings_read on public.platform_settings;
+create policy platform_settings_read on public.platform_settings
+  for select using (public.app_current_tenant_id() is not null or public.app_is_privileged());
+drop policy if exists platform_settings_write on public.platform_settings;
+create policy platform_settings_write on public.platform_settings
+  for insert with check (public.app_is_privileged());
+drop policy if exists platform_settings_update on public.platform_settings;
+create policy platform_settings_update on public.platform_settings
+  for update using (public.app_is_privileged()) with check (public.app_is_privileged());
+
+-- ============================================================================
+-- Data retention & deletion — see src/retention.ts for the grace-period
+-- numbers and src/purge.ts for the actual purge logic; both are run by the
+-- cron sweep in index.ts's scheduled() handler. Two independent soft-delete
+-- markers, both nullable (null = not scheduled for deletion):
+--
+--   tenants.deletion_requested_at  — the whole account. Deliberately does
+--     NOT touch is_active or otherwise restrict access during the grace
+--     period: the account stays fully usable so cancelling the request is
+--     as easy as using the product normally, same reasoning most consumer
+--     "delete my account" flows use. After the grace period, the purge job
+--     deletes the auth.users row via the Supabase Admin API, which cascades
+--     (on delete cascade, see the tenants table above) through every
+--     tenant-owned table in one step — R2 objects are cleaned up
+--     separately first, since R2 isn't part of that cascade.
+--   documents.deleted_at — a single document, restorable within its own
+--     grace period. Only listDocumentsByTenant (the main user-facing list)
+--     filters it out by default; other internal queries (reconciliation,
+--     GST matching, exports) do not yet — see NEXT_STEPS.md.
+-- ============================================================================
+alter table public.tenants add column if not exists deletion_requested_at timestamptz;
+alter table public.documents add column if not exists deleted_at timestamptz;
+create index if not exists idx_tenants_deletion_requested on public.tenants (deletion_requested_at) where deletion_requested_at is not null;
+create index if not exists idx_documents_deleted_at on public.documents (deleted_at) where deleted_at is not null;

@@ -10,7 +10,9 @@ import { RazorpayConnector } from "../integrations/razorpay";
 import { StripeConnector } from "../integrations/stripe";
 import { slackAuthUrl, slackExchangeCode } from "../integrations/slack";
 import { storeOAuthState, consumeOAuthState } from "../ratelimit";
+import { setTenantContext } from "../security/tenantContext";
 import type { DataConnector } from "../integrations/connector";
+import { apiError } from "../http";
 
 export const integrationRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
@@ -33,14 +35,14 @@ integrationRoutes.get("/", requireAuth, async (c) => c.json({ items: await listI
 integrationRoutes.post("/:provider/connect", requireAuth, async (c) => {
   const provider = c.req.param("provider").toUpperCase();
   const connector = dataConnectorFor(provider);
-  if (!connector) return c.json({ error: `${provider} is not yet implemented — see src/integrations/connector.ts for what's needed to add it` }, 501);
+  if (!connector) return apiError(c, 501, "NOT_IMPLEMENTED", `${provider} is not yet implemented — see src/integrations/connector.ts for what's needed to add it`);
 
   const { credentials } = await c.req.json();
   let externalAccountId: string, externalAccountName: string;
   try {
     ({ externalAccountId, externalAccountName } = await connector.connect(credentials ?? {}));
   } catch (e) {
-    return c.json({ error: (e as Error).message }, 400);
+    return apiError(c, 400, "VALIDATION_ERROR", (e as Error).message);
   }
 
   // Multi-field providers (Razorpay: key_id + key_secret) store the
@@ -70,11 +72,11 @@ integrationRoutes.post("/:provider/connect", requireAuth, async (c) => {
 integrationRoutes.post("/:provider/sync", requireAuth, async (c) => {
   const provider = c.req.param("provider").toUpperCase();
   const connector = dataConnectorFor(provider);
-  if (!connector) return c.json({ error: `${provider} does not support data sync` }, 501);
+  if (!connector) return apiError(c, 501, "NOT_IMPLEMENTED", `${provider} does not support data sync`);
 
   const tenantId = c.get("tenant").tenantId;
   const existing = await getIntegration(c.get("sql"), tenantId, provider);
-  if (!existing) return c.json({ error: `${provider} is not connected` }, 404);
+  if (!existing) return apiError(c, 404, "NOT_FOUND", `${provider} is not connected`);
 
   const credentials: Record<string, string> = {};
   if (provider === "STRIPE" && existing.apiKeyEncrypted) {
@@ -83,7 +85,7 @@ integrationRoutes.post("/:provider/sync", requireAuth, async (c) => {
     const decrypted = await decryptField(c.env, existing.credentialsEncrypted);
     Object.assign(credentials, JSON.parse(decrypted) as Record<string, string>);
   } else if (MULTI_FIELD_CREDENTIAL_PROVIDERS.has(provider)) {
-    return c.json({ error: `${provider} is connected but has no stored credentials — reconnect it` }, 409);
+    return apiError(c, 409, "CONFLICT", `${provider} is connected but has no stored credentials — reconnect it`);
   }
 
   let txns;
@@ -91,7 +93,7 @@ integrationRoutes.post("/:provider/sync", requireAuth, async (c) => {
     txns = await connector.fetchTransactions(credentials, "");
   } catch (e) {
     await upsertIntegration(c.get("sql"), { tenantId, provider, status: "ERROR", lastError: (e as Error).message });
-    return c.json({ error: `Sync failed: ${(e as Error).message}` }, 502);
+    return apiError(c, 502, "UPSTREAM_ERROR", `Sync failed: ${(e as Error).message}`);
   }
 
   const created = await bulkInsertBankTransactions(c.get("sql"), txns.map((t) => ({
@@ -126,6 +128,14 @@ integrationRoutes.get("/slack/callback", async (c) => {
   const state = c.req.query("state") ?? "";
   const tenantId = await consumeOAuthState(c.env, state);
   if (!tenantId) return c.redirect(`${c.env.FRONTEND_ORIGIN}/?integration=slack&status=error&reason=invalid_state`, 302);
+  // This route sits outside requireAuth (Slack redirects the browser
+  // here directly, no bearer token), so nothing has set tenant context
+  // on this connection yet. Unlike the webhook lookups, the tenant is
+  // already known exactly here — it came out of Upstash Redis, keyed by
+  // a state value the /slack/connect handler generated and this exchange
+  // can only succeed once for — so this sets it directly rather than
+  // reaching for the broader system_context bypass.
+  await setTenantContext(c.get("sql"), tenantId);
 
   try {
     const { accessToken, teamName, incomingWebhookUrl } = await slackExchangeCode(c.env, c.get("sql"), code);

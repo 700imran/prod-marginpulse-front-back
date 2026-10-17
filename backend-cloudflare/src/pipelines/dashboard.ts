@@ -5,6 +5,7 @@
 //     ITC-risk / vendor follow-up / filing-deadline view) -> buildBusinessInsights
 import type { Sql } from "../db";
 import type { Env } from "../config";
+import type { TenantContext } from "../auth/supabase";
 import { countDocumentsByTenant, countDocumentsByStatus, listByGSTStatus, type DocumentRow } from "../repository/documents";
 import { listAnomalies } from "../repository/anomalies";
 import { generateInsight } from "./insights";
@@ -21,7 +22,8 @@ export interface DashboardSummary {
   plainEnglishInsight: string;
 }
 
-export async function buildDashboardSummary(sql: Sql, env: Env, tenantId: string): Promise<DashboardSummary> {
+export async function buildDashboardSummary(sql: Sql, env: Env, tenant: TenantContext): Promise<DashboardSummary> {
+  const tenantId = tenant.tenantId;
   const total = await countDocumentsByTenant(sql, tenantId);
   const reconciled = await countDocumentsByStatus(sql, tenantId, "RECONCILED");
 
@@ -46,6 +48,7 @@ export async function buildDashboardSummary(sql: Sql, env: Env, tenantId: string
   }
 
   const plainEnglish = await generateInsight(
+    sql,
     env,
     {
       totalUploadedDocuments: total,
@@ -57,7 +60,7 @@ export async function buildDashboardSummary(sql: Sql, env: Env, tenantId: string
       anomalyBreakdown: {},
       period: "",
     },
-    tenantId,
+    tenant,
   );
 
   return {

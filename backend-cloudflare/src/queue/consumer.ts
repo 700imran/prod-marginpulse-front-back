@@ -17,11 +17,26 @@ import { appendAuditLog } from "../repository/auditLog";
 import { getTaxIdentifierById, updateTaxIdentifierVerification } from "../repository/taxIdentifiers";
 import { getBankAccountById, updateBankAccountVerification } from "../repository/bankAccounts";
 import { decryptField } from "../security/fieldEncryption";
+import { setTenantContext } from "../security/tenantContext";
+import { reportError } from "../monitoring";
+import { refundCredits } from "../billing/credits";
+import { recordUsageEvent } from "../billing/usage";
+
+interface CreditReservation {
+  tenant_id: string;
+  operation: string;
+  amount: number;
+}
 
 interface TaskMessage {
   task: string;
   job_id: string;
   args: Record<string, any>;
+  // Present only for tasks whose enqueueing route reserved usage credits
+  // up front (routes/gst.ts, routes/taxIdentifiers.ts,
+  // routes/bankAccounts.ts). Used below to log the successful spend, and
+  // by handleDeadLetterBatch to refund it if the job never completes.
+  credit_reservation?: CreditReservation;
 }
 
 function argStr(args: Record<string, any>, key: string): string {
@@ -69,6 +84,11 @@ async function runOCRPipeline(env: Env, args: Record<string, any>): Promise<void
 
   const sql = getDb(env);
   try {
+    // Every table finalizeOcrResult (and what it chains into) touches is
+    // Row-Level-Security scoped by tenant_id — see db/schema.sql. This is
+    // the one point on the queue-driven ingestion path where the tenant
+    // is first known, so it's set here before anything else runs.
+    await setTenantContext(sql, tenantId);
     await finalizeOcrResult(env, sql, tenantId, documentId, result);
   } finally {
     await sql.end();
@@ -100,6 +120,13 @@ async function runReconciliation(env: Env, sqlIn: ReturnType<typeof getDb> | nul
   const sql = sqlIn ?? getDb(env);
   const ownConnection = !sqlIn;
   try {
+    // When called standalone (the run_reconciliation queue task, or a
+    // future direct caller), this is the first query on the connection,
+    // so tenant context needs setting here. When chained from
+    // finalizeOcrResult (sqlIn passed in), the caller already set it on
+    // this same connection — setting it again would be harmless but
+    // redundant, so it's skipped.
+    if (ownConnection) await setTenantContext(sql, tenantId);
     const doc = await getDocumentById(sql, tenantId, documentId);
     if (!doc) throw new Error(`document ${documentId} not found`);
     if (!doc.rawTotalAmount || parseFloat(doc.rawTotalAmount) === 0 || !doc.documentDate) {
@@ -157,6 +184,7 @@ async function syncGSTPortal(env: Env, args: Record<string, any>): Promise<void>
 
   const sql = getDb(env);
   try {
+    await setTenantContext(sql, tenantId);
     const invoices = await listInvoicesWithTaxIdentifier(sql, tenantId);
     const internalVendors: InternalVendor[] = invoices.map((inv) => ({
       documentId: inv.documentId, vendorName: inv.vendorName ?? "", taxIdentifier: inv.taxIdentifier ?? "",
@@ -182,6 +210,7 @@ async function verifyTaxIdentifierTask(env: Env, args: Record<string, any>): Pro
 
   const sql = getDb(env);
   try {
+    await setTenantContext(sql, tenantId);
     const taxId = await getTaxIdentifierById(sql, tenantId, taxIdentifierId);
     if (!taxId) throw new Error(`tax identifier ${taxIdentifierId} not found`);
 
@@ -203,6 +232,7 @@ async function verifyBankAccountTask(env: Env, args: Record<string, any>): Promi
 
   const sql = getDb(env);
   try {
+    await setTenantContext(sql, tenantId);
     const account = await getBankAccountById(sql, tenantId, bankAccountId);
     if (!account) throw new Error(`bank account ${bankAccountId} not found`);
 
@@ -228,24 +258,108 @@ const TASK_REGISTRY: Record<string, (env: Env, args: Record<string, any>) => Pro
 // Cloudflare Queues consumer entry point — wired up from src/index.ts's
 // exported `queue()` handler. Each message is acked/retried
 // individually (message.ack() / message.retry()), same effect as SQS's
-// per-item BatchItemFailures.
+// per-item BatchItemFailures. Also handles the *-dlq queues (see
+// wrangler.toml) via the same entry point, disambiguated by batch.queue —
+// Cloudflare routes every bound consumer queue to this one Worker export.
 export async function handleQueueBatch(batch: MessageBatch<TaskMessage>, env: Env): Promise<void> {
-  for (const message of batch.messages) {
-    const msg = message.body;
-    const taskFn = TASK_REGISTRY[msg.task];
-    if (!taskFn) {
-      console.error("unknown_task", { task: msg.task, jobId: msg.job_id });
-      message.ack(); // unknown task type — don't retry forever, drop it
-      continue;
+  if (batch.queue?.endsWith("-dlq")) {
+    await handleDeadLetterBatch(batch, env);
+    return;
+  }
+
+  // Opened once per batch, used only for usage-event bookkeeping below —
+  // each task function still opens/closes its own connection as before,
+  // this doesn't change their transaction boundaries.
+  const sql = getDb(env);
+  try {
+    for (const message of batch.messages) {
+      const msg = message.body;
+      const taskFn = TASK_REGISTRY[msg.task];
+      if (!taskFn) {
+        await reportError(env, new Error(`unknown task type: ${msg.task}`), { tags: { area: "queue", jobId: msg.job_id, queue: batch.queue } });
+        message.ack(); // unknown task type — don't retry forever, drop it
+        continue;
+      }
+      console.log("task_started", { task: msg.task, jobId: msg.job_id });
+      try {
+        await taskFn(env, msg.args);
+        console.log("task_completed", { task: msg.task, jobId: msg.job_id });
+        const reservation = msg.credit_reservation;
+        if (reservation) {
+          // The debit already happened at reserve time (routes/*.ts) —
+          // this just records that the paid-for work actually succeeded,
+          // for the /billing/usage view and any future cost dashboards.
+          // usage_events is RLS-scoped like every other tenant table, and
+          // this `sql` connection is shared across the whole batch (which
+          // can span several tenants), so the context has to be set fresh
+          // for each message rather than once for the batch.
+          try {
+            await setTenantContext(sql, reservation.tenant_id);
+            await recordUsageEvent(sql, {
+              tenantId: reservation.tenant_id, provider: reservation.operation,
+              operation: reservation.operation, outcome: "SUCCESS",
+              creditsConsumed: reservation.amount, correlationId: msg.job_id, jobId: msg.job_id,
+            });
+          } catch (e) {
+            console.error("usage_event_log_failed", { jobId: msg.job_id, error: (e as Error).message });
+          }
+        }
+        message.ack();
+      } catch (e) {
+        // A single retryable failure isn't necessarily a problem (queues
+        // retry by design) — "warning", not "error". The DLQ path below
+        // is what reports at full severity, since that's the point a
+        // failure has actually become permanent.
+        await reportError(env, e, { severity: "warning", tags: { area: "queue", task: msg.task, jobId: msg.job_id, queue: batch.queue } });
+        message.retry();
+      }
     }
-    console.log("task_started", { task: msg.task, jobId: msg.job_id });
-    try {
-      await taskFn(env, msg.args);
-      console.log("task_completed", { task: msg.task, jobId: msg.job_id });
+  } finally {
+    await sql.end();
+  }
+}
+
+// Runs for messages that exhausted max_retries on their original queue and
+// landed in its dead_letter_queue (wrangler.toml). This is the only place
+// a permanently-failed, credit-reserved job gets refunded — the normal
+// per-message catch block above only sees retryable failures, never the
+// final one, since Cloudflare moves the message to the DLQ without
+// invoking this Worker again on that queue.
+async function handleDeadLetterBatch(batch: MessageBatch<TaskMessage>, env: Env): Promise<void> {
+  const sql = getDb(env);
+  try {
+    for (const message of batch.messages) {
+      const msg = message.body;
+      await reportError(env, new Error(`task ${msg.task} exhausted retries`), { tags: { area: "queue_dlq", task: msg.task, jobId: msg.job_id, queue: batch.queue } });
+      try {
+        const reservation = msg.credit_reservation;
+        if (reservation) {
+          await setTenantContext(sql, reservation.tenant_id);
+          const refund = await refundCredits(sql, {
+            tenantId: reservation.tenant_id,
+            amount: reservation.amount,
+            operation: reservation.operation,
+            jobId: msg.job_id,
+            description: `Refund: ${reservation.operation} failed permanently after retries (${batch.queue})`,
+          });
+          await recordUsageEvent(sql, {
+            tenantId: reservation.tenant_id, provider: reservation.operation,
+            operation: reservation.operation, outcome: "REFUNDED",
+            creditsConsumed: -reservation.amount, correlationId: msg.job_id, jobId: msg.job_id,
+          });
+          console.log("credits_refunded_after_dlq", { jobId: msg.job_id, amount: reservation.amount, balanceAfter: refund.balanceAfter });
+        }
+      } catch (e) {
+        // Never let a refund failure cause an infinite DLQ-of-the-DLQ
+        // retry loop — this needs a human, so log loudly and still ack
+        // so the queue drains. Today that log only goes wherever you
+        // point Workers Logs / `wrangler tail` — see STATUS.md's
+        // monitoring section for wiring this to a real alert channel.
+        console.error("dlq_refund_failed", { jobId: msg.job_id, error: (e as Error).message });
+      }
       message.ack();
-    } catch (e) {
-      console.error("task_failed", { task: msg.task, jobId: msg.job_id, error: (e as Error).message });
-      message.retry();
     }
+  } finally {
+    await sql.end();
   }
 }

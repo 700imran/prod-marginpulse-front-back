@@ -35,3 +35,17 @@ export async function sendTeamInvite(env: Env, toEmail: string, businessName: st
 <p><a href="${env.FRONTEND_ORIGIN}/accept-invite?token=${inviteToken}">Accept invitation</a></p>`;
   await sendEmail(env, toEmail, subject, body);
 }
+
+export async function sendAccountDeletionScheduled(env: Env, toEmail: string, businessName: string, purgeDate: string): Promise<void> {
+  const subject = `Your MarginPulse Pro account is scheduled for deletion`;
+  const body = `<p>We've received a request to delete the <strong>${businessName}</strong> account.</p>
+<p>Your account and all of its data will be permanently deleted on <strong>${purgeDate}</strong>. Until then, everything stays exactly as it is and you can keep using it normally.</p>
+<p>Changed your mind? Just log in and cancel the deletion from your account settings before that date — no need to contact support.</p>`;
+  await sendEmail(env, toEmail, subject, body);
+}
+
+export async function sendAccountDeletionCancelled(env: Env, toEmail: string, businessName: string): Promise<void> {
+  const subject = `Your MarginPulse Pro account deletion was cancelled`;
+  const body = `<p>The scheduled deletion for <strong>${businessName}</strong> has been cancelled. Your account remains active as normal.</p>`;
+  await sendEmail(env, toEmail, subject, body);
+}

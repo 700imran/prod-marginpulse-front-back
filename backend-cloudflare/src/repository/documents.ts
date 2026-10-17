@@ -27,6 +27,7 @@ export interface DocumentRow {
   gstPortalStatus: string;
   duplicateOfDocumentId: string | null;
   manuallyCorrected: boolean;
+  deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -42,7 +43,7 @@ const SELECT = `
   reconciliation_score as "reconciliationScore", reconciliation_reason as "reconciliationReason",
   matched_bank_transaction_id as "matchedBankTransactionId", gst_portal_status as "gstPortalStatus",
   duplicate_of_document_id as "duplicateOfDocumentId", manually_corrected as "manuallyCorrected",
-  created_at as "createdAt", updated_at as "updatedAt"
+  deleted_at as "deletedAt", created_at as "createdAt", updated_at as "updatedAt"
 `;
 
 export async function createDocument(
@@ -76,7 +77,11 @@ export interface ListDocumentsFilter {
 }
 
 export async function listDocumentsByTenant(sql: Sql, tenantId: string, f: ListDocumentsFilter): Promise<DocumentRow[]> {
-  const clauses: string[] = ["tenant_id = $1"];
+  // deleted_at is null: this is the main user-facing list (GET
+  // /documents) — a soft-deleted document belongs in "trash", not here.
+  // Other query functions in this file intentionally do NOT filter it
+  // out yet (reconciliation/GST-matching/export) — see NEXT_STEPS.md.
+  const clauses: string[] = ["tenant_id = $1", "deleted_at is null"];
   const params: unknown[] = [tenantId];
   const push = (clause: string, value: unknown) => {
     params.push(value);
@@ -93,7 +98,7 @@ export async function listDocumentsByTenant(sql: Sql, tenantId: string, f: ListD
 }
 
 export async function countDocumentsByTenant(sql: Sql, tenantId: string): Promise<number> {
-  const rows = await sql<{ count: string }[]>`select count(*)::text from documents where tenant_id = ${tenantId}`;
+  const rows = await sql<{ count: string }[]>`select count(*)::text from documents where tenant_id = ${tenantId} and deleted_at is null`;
   return parseInt(rows[0]!.count, 10);
 }
 
@@ -217,4 +222,46 @@ export async function listAllForExport(sql: Sql, tenantId: string): Promise<Docu
 
 export async function listByStatus(sql: Sql, tenantId: string, status: string): Promise<DocumentRow[]> {
   return sql.unsafe<DocumentRow[]>(`select ${SELECT} from documents where tenant_id = $1 and processing_status = $2`, [tenantId, status]);
+}
+
+// --- Soft delete / restore / purge (see src/retention.ts, src/purge.ts) ---
+
+export async function softDeleteDocument(sql: Sql, tenantId: string, documentId: string): Promise<DocumentRow | null> {
+  const rows = await sql.unsafe<DocumentRow[]>(
+    `update documents set deleted_at = now(), updated_at = now()
+     where tenant_id = $1 and document_id = $2 and deleted_at is null
+     returning ${SELECT}`,
+    [tenantId, documentId],
+  );
+  return rows[0] ?? null;
+}
+
+export async function restoreDocument(sql: Sql, tenantId: string, documentId: string): Promise<DocumentRow | null> {
+  const rows = await sql.unsafe<DocumentRow[]>(
+    `update documents set deleted_at = null, updated_at = now()
+     where tenant_id = $1 and document_id = $2 and deleted_at is not null
+     returning ${SELECT}`,
+    [tenantId, documentId],
+  );
+  return rows[0] ?? null;
+}
+
+// Cross-tenant by design — called only from the cron purge sweep
+// (src/purge.ts), which runs under system_context. Never expose this to
+// a per-tenant route.
+export async function listDocumentsPendingPurge(sql: Sql, olderThan: Date, limit = 500): Promise<DocumentRow[]> {
+  return sql.unsafe<DocumentRow[]>(
+    `select ${SELECT} from documents
+     where deleted_at is not null and deleted_at <= $1
+     order by deleted_at asc
+     limit $2`,
+    [olderThan.toISOString(), limit],
+  );
+}
+
+// Actually removes the row. Callers (src/purge.ts) must delete the R2
+// object at doc.storageKey *before* calling this — once the row is gone,
+// the tenant-scoped key needed to find that object is gone with it.
+export async function hardDeleteDocumentRow(sql: Sql, tenantId: string, documentId: string): Promise<void> {
+  await sql`delete from documents where tenant_id = ${tenantId} and document_id = ${documentId}`;
 }

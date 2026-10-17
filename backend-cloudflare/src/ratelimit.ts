@@ -7,7 +7,7 @@ import type { Env } from "./config";
 // You're already on Upstash per your existing setup, so this is a client
 // swap, not a new dependency.
 
-async function upstash(env: Env, ...command: (string | number)[]): Promise<any> {
+export async function upstash(env: Env, ...command: (string | number)[]): Promise<any> {
   const res = await fetch(env.UPSTASH_REDIS_REST_URL, {
     method: "POST",
     headers: {
