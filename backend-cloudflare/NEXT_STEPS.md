@@ -279,6 +279,19 @@ a task list, not just prose:
       single batch's usage-event writes ever become a throughput
       bottleneck.
 
+- [ ] New: **assistant — red-team before enabling.** Run adversarial prompts
+      (injected vendor names, "I'm the admin", multi-turn pressure, forged
+      history) against the live model with `ANTHROPIC_API_KEY` set; see
+      `WORKFLOW.md` → "What's still open". Keep
+      `ASSISTANT_MUTATIONS_ENABLED = "false"` until Phase 1 has been used.
+- [ ] New: assistant frontend (chat UI + confirm/cancel + 402 handling;
+      render all assistant text as plain text).
+- [ ] New: run the new SQL against a real Supabase project
+      (`searchDocumentsByInvoiceOrVendor`, `listByGSTStatus` filter) — only
+      type-checked so far.
+- [ ] New: tune `ASSISTANT_MESSAGE` credit cost and the 0.02 USD budget
+      estimate in `routes/assistant.ts`.
+
 ## Quick file map
 
 | Need to change... | Look in... |
@@ -287,6 +300,7 @@ a task list, not just prose:
 | A DB query | `src/repository/<entity>.ts` |
 | Reconciliation/OCR/GST logic | `src/pipelines/<name>.ts` |
 | A background job | `src/queue/consumer.ts` |
+| Natural-language assistant | `src/assistant/*`, `src/routes/assistant.ts`, `WORKFLOW.md`, `test/` |
 | Usage credits / pricing | `src/billing/pricing.ts` (numbers), `src/billing/credits.ts` (logic) |
 | Tenant isolation / RLS | `db/schema.sql` (policies), `src/security/tenantContext.ts` (session vars), `db/rls_test.sql` (proof) |
 | API error format | `src/errors.ts` (codes, AppError), `src/http.ts` (apiError helper) |

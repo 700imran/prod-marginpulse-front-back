@@ -102,13 +102,14 @@
 > - No CI/CD for `backend-cloudflare/` (there is one for the frontend,
 >   per the top banner's "CI/CD" bullet — this is a separate gap)
 > - Domain/DNS readiness — needs real domain access, not code
-> - **Natural-language action layer — not started at all.** This is the
->   next task; see `backend-cloudflare/WORKFLOW.md` for the design before
->   writing any code against it. Don't start implementing this from a
->   cold read of the master prompt alone — WORKFLOW.md already worked
->   through the safety-boundary questions (what the LLM is and isn't
->   allowed to trigger directly) that matter most to get right the first
->   time, given this product handles real financial/tax data.
+> - **Natural-language action layer — backend built, not launched.**
+>   Phase 1 (read-only) and Phase 2 (confirm-first mutations, flag
+>   `ASSISTANT_MUTATIONS_ENABLED`, default off) live in
+>   `backend-cloudflare/src/assistant/` + `src/routes/assistant.ts`; 51 tests
+>   (`npm test`). Still open: frontend chat UI, red-teaming the prompt against
+>   the live model, running the new SQL against Supabase. Read
+>   `backend-cloudflare/WORKFLOW.md` ("Implementation notes" / "What's still
+>   open") before changing anything here.
 
 > ## This pass (frontend visual/branding pass)
 >

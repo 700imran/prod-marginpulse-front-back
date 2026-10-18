@@ -22,7 +22,12 @@ export interface DashboardSummary {
   plainEnglishInsight: string;
 }
 
-export async function buildDashboardSummary(sql: Sql, env: Env, tenant: TenantContext): Promise<DashboardSummary> {
+// includeInsight=false skips the paid LLM-written paragraph entirely (no
+// credit reservation, no Anthropic call) and returns plainEnglishInsight as
+// "". The assistant uses this: it narrates the numbers itself as part of its
+// own already-metered reply, so charging AI_INSIGHT on top would double-bill
+// one user action.
+export async function buildDashboardSummary(sql: Sql, env: Env, tenant: TenantContext, opts: { includeInsight?: boolean } = {}): Promise<DashboardSummary> {
   const tenantId = tenant.tenantId;
   const total = await countDocumentsByTenant(sql, tenantId);
   const reconciled = await countDocumentsByStatus(sql, tenantId, "RECONCILED");
@@ -47,7 +52,7 @@ export async function buildDashboardSummary(sql: Sql, env: Env, tenant: TenantCo
     }
   }
 
-  const plainEnglish = await generateInsight(
+  const plainEnglish = opts.includeInsight === false ? "" : await generateInsight(
     sql,
     env,
     {

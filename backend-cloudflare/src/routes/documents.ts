@@ -6,12 +6,12 @@ import { requireAuth } from "../middleware/auth";
 import { uploadBytes, downloadBytes, buildStorageKey, signDownloadToken, verifyDownloadToken } from "../storage";
 import {
   createDocument, getDocumentById, listDocumentsByTenant, updateDocumentFields, findDuplicateDocument,
-  softDeleteDocument, restoreDocument,
 } from "../repository/documents";
 import { appendAuditLog, listAuditLogForEntity } from "../repository/auditLog";
 import { createAnomaly } from "../repository/anomalies";
 import { processDocument, parseOcrLines } from "../pipelines/ocr";
 import { finalizeOcrResult } from "../queue/consumer";
+import { trashDocument, untrashDocument } from "../actions/documents";
 import { apiError } from "../http";
 
 export const documentRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
@@ -148,9 +148,8 @@ documentRoutes.delete("/:id", async (c) => {
   const tenant = c.get("tenant");
   const sql = c.get("sql");
   const id = c.req.param("id");
-  const doc = await softDeleteDocument(sql, tenant.tenantId, id);
+  const doc = await trashDocument(sql, tenant, id);
   if (!doc) return apiError(c, 404, "NOT_FOUND", "document not found");
-  await appendAuditLog(sql, { tenantId: tenant.tenantId, entityType: "DOCUMENT", entityId: id, action: "DELETED", actorEmail: tenant.ownerEmail });
   return c.json({ status: "DELETED" });
 });
 
@@ -158,8 +157,7 @@ documentRoutes.post("/:id/restore", async (c) => {
   const tenant = c.get("tenant");
   const sql = c.get("sql");
   const id = c.req.param("id");
-  const doc = await restoreDocument(sql, tenant.tenantId, id);
+  const doc = await untrashDocument(sql, tenant, id);
   if (!doc) return apiError(c, 404, "NOT_FOUND", "document not found, or not currently in trash");
-  await appendAuditLog(sql, { tenantId: tenant.tenantId, entityType: "DOCUMENT", entityId: id, action: "RESTORED", actorEmail: tenant.ownerEmail });
   return c.json(doc);
 });

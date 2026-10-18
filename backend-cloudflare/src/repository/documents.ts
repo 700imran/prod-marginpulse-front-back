@@ -211,8 +211,32 @@ export async function countDocumentsByStatus(sql: Sql, tenantId: string, status:
 
 export async function listByGSTStatus(sql: Sql, tenantId: string, gstPortalStatus: string): Promise<DocumentRow[]> {
   return sql.unsafe<DocumentRow[]>(
-    `select ${SELECT} from documents where tenant_id = $1 and gst_portal_status = $2`,
+    // deleted_at is null: a trashed invoice shouldn't count toward ITC-at-risk
+    // or show up in "which invoices have GST problems" — closes this one
+    // function's share of the soft-delete gap in NEXT_STEPS.md.
+    `select ${SELECT} from documents where tenant_id = $1 and gst_portal_status = $2 and deleted_at is null`,
     [tenantId, gstPortalStatus],
+  );
+}
+
+// Escapes LIKE metacharacters so a user-/model-supplied search string is
+// matched literally ("100%" must not become a wildcard). Always used with
+// `escape '\\'` in the SQL below.
+function escapeLike(term: string): string {
+  return term.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
+// Assistant lookup ("what's the status of invoice INV-204 / vendor Acme?").
+// Parameterized, tenant-scoped, excludes trashed rows, hard-capped.
+export async function searchDocumentsByInvoiceOrVendor(sql: Sql, tenantId: string, term: string, limit = 5): Promise<DocumentRow[]> {
+  const pattern = `%${escapeLike(term.trim())}%`;
+  return sql.unsafe<DocumentRow[]>(
+    `select ${SELECT} from documents
+     where tenant_id = $1 and deleted_at is null
+       and (invoice_number ilike $2 escape '\\' or vendor_name ilike $2 escape '\\')
+     order by created_at desc
+     limit $3`,
+    [tenantId, pattern, Math.min(Math.max(limit, 1), 10)],
   );
 }
 

@@ -4,7 +4,7 @@ import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
 import { listInvoicesWithTaxIdentifier, listByGSTStatus } from "../repository/documents";
-import { reserveForOperation } from "../billing/guard";
+import { requestGstSync } from "../actions/gst";
 import { apiError } from "../http";
 
 export const gstRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
@@ -17,22 +17,13 @@ gstRoutes.use("*", requireAuth);
 // is refunded — see queue/consumer.ts's handleDeadLetterBatch.
 gstRoutes.post("/sync", async (c) => {
   const tenant = c.get("tenant");
-  const sql = c.get("sql");
   const period = c.req.query("period") ?? "";
-  if (!tenant.gstinNumber) return apiError(c, 400, "VALIDATION_ERROR", "No GSTIN registered for this account");
-
-  const jobId = crypto.randomUUID();
-  const reservation = await reserveForOperation(sql, tenant, "GST_SYNC", jobId);
-  if (!reservation.ok) {
-    return apiError(c, 402, "INSUFFICIENT_CREDITS", "Not enough usage credits for a GST sync this billing period", { credits_remaining: reservation.balanceAfter });
+  const result = await requestGstSync(c.env, c.get("sql"), tenant, period);
+  if (!result.ok) {
+    if (result.reason === "NO_GSTIN") return apiError(c, 400, "VALIDATION_ERROR", "No GSTIN registered for this account");
+    return apiError(c, 402, "INSUFFICIENT_CREDITS", "Not enough usage credits for a GST sync this billing period", { credits_remaining: result.creditsRemaining });
   }
-
-  await c.env.GST_QUEUE.send({
-    task: "sync_gst_portal", job_id: jobId,
-    args: { tenant_id: tenant.tenantId, gstin: tenant.gstinNumber, period },
-    credit_reservation: { tenant_id: tenant.tenantId, operation: "GST_SYNC", amount: reservation.amount },
-  });
-  return c.json({ job_id: jobId, gstin: tenant.gstinNumber, credits_remaining: reservation.balanceAfter }, 202);
+  return c.json({ job_id: result.jobId, gstin: result.gstin, credits_remaining: result.creditsRemaining }, 202);
 });
 
 // worseStatus ranks GST statuses worst-first so a vendor with even one

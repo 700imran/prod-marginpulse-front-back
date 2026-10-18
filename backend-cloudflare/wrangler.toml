@@ -143,3 +143,6 @@ FRONTEND_ORIGIN = "https://marginpulse-app.vercel.app"
 INGEST_EMAIL_ADDRESS = "noreply@marginpulse.example.com"
 WHATSAPP_API_VERSION = "v19.0"
 AI_INSIGHTS_DAILY_BUDGET_USD = "5.00"
+# Assistant Phase 2 (sync_gst / soft_delete_document / restore_document, each behind an explicit confirmation).
+# Off until Phase 1 (read-only) has been live and used — see WORKFLOW.md.
+ASSISTANT_MUTATIONS_ENABLED = "false"

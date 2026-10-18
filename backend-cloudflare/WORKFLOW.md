@@ -1,10 +1,15 @@
 # Workflow: natural-language action layer
 
-**Status: design only — nothing in this file is implemented yet.** This
-is the plan to work from before writing code, not a record of what
-exists. See `BRAIN.md`'s "Backend hardening pass" section and
-`STATUS.md` for everything that *is* done; this is the one master-prompt
-item (§28) that pass didn't touch.
+**Status: Phase 1 and Phase 2 are implemented (backend only), with Phase 2
+switched off by default.** Code: `src/assistant/` (tools, sanitize, input,
+confirm, prompt, llm, service), `src/routes/assistant.ts`,
+`src/actions/{gst,documents}.ts` (the shared code paths the REST routes and
+the assistant both call). Tests: `test/assistant_*.test.ts` (`npm test`).
+Phase 2 is gated by `ASSISTANT_MUTATIONS_ENABLED` in `wrangler.toml`
+(`"false"` — flip to `"true"` once Phase 1 has been live and used, per the
+rollout order below). **Not done:** the frontend chat UI, and adversarial
+testing against the live model — see "What's still open" at the bottom. The
+design below is unchanged; it is what the code was built to.
 
 ## Why this needs a plan before code
 
@@ -195,3 +200,58 @@ eyeball a few manual tries. At minimum:
   implementation time).
 - What `ASSISTANT_MESSAGE`'s credit cost should actually be — a
   placeholder guess like the rest of `pricing.ts`, tune later.
+
+## Implementation notes (what was actually built, and where it differs from the design above)
+
+- **Endpoints:** `POST /api/v1/assistant/message` and
+  `POST /api/v1/assistant/confirm` (`{ "confirmation_token": "..." }` →
+  `{ type: "action_result", action, message, data? }`). `message` responses
+  also carry `credits_remaining`, and a `confirm_action` response carries
+  `confirmation_token` and `expires_at` (unix seconds) — the one addition to
+  the API surface sketched above.
+- **Confirmation token** (`assistant/confirm.ts`): HMAC-signed (key derived
+  from `FIELD_ENCRYPTION_KEY` under its own context label), binds tenant +
+  action + validated args + 5-minute expiry + nonce, **single-use** via
+  Redis `SET NX` (fails closed if Redis is unreachable). On confirm, the
+  action is re-validated against *current* state before it runs.
+- **The confirm summary is written by the server**, not the model, so an
+  injected instruction can't make a proposal misdescribe what it will do.
+  Document names inside it are sanitized but originate from uploads —
+  **the frontend must render the summary as plain text, never as HTML.**
+- **Rejected tool names are never "mapped to a nearby tool"**: an unknown
+  name gets an error result and nothing runs. Excluded capabilities simply
+  don't exist in `assistant/tools.ts`; `test/assistant_core.test.ts` asserts
+  that no tool name matches the forbidden patterns and that no tool accepts a
+  tenant/user argument.
+- **`get_dashboard_summary` skips the paid LLM insight** (new
+  `buildDashboardSummary(..., { includeInsight: false })`), so one assistant
+  message never triggers a second, separately-charged AI call.
+- **Credits:** one `ASSISTANT_MESSAGE` reservation per request (placeholder
+  cost 1 in `billing/pricing.ts`), refunded if the model call fails or the
+  platform AI budget is exhausted. A confirmed `sync_gst` makes its own,
+  separate `GST_SYNC` reservation inside `actions/gst.ts`.
+- **Rate limits:** 20/min/tenant on `/message`, 10/min/tenant on `/confirm`.
+- **Audit:** assistant-confirmed document changes write the same
+  `audit_log` row as the buttons, with `reason = "via assistant: <tool>"`.
+  `POST /gst/sync` has never written an audit row, so neither does the
+  assistant version.
+- **Side effect worth knowing:** `listByGSTStatus` now excludes trashed
+  documents (the assistant would otherwise report invoices the user deleted).
+  That also changes the dashboard's ITC-at-risk numbers — correctly, but it
+  is a behaviour change. It closes that one function's share of the
+  soft-delete gap in `NEXT_STEPS.md`.
+
+## What's still open
+
+- **Adversarial testing against the real model** (open question 1 above).
+  The tests prove the *server-side* boundary holds even when the model is
+  scripted to misbehave; they cannot prove the model behaves. Red-team
+  `assistant/prompt.ts` against live model output before enabling for users.
+- **Frontend:** no chat UI exists. It must handle `402 INSUFFICIENT_CREDITS`,
+  the `confirm_action` → confirm/cancel button → `/confirm` flow, and render
+  summaries/messages as plain text.
+- **Pricing:** `ASSISTANT_MESSAGE` cost and the 0.02 USD per-message platform
+  budget estimate are placeholder guesses.
+- **Role enforcement:** `team_members.role` is still unchecked everywhere, so
+  any team member can propose and confirm any assistant action their tenant
+  allows. Revisit when roles are enforced (a VIEWER shouldn't get Phase 2).

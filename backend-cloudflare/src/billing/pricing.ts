@@ -28,6 +28,7 @@ export const OPERATION_COST_CREDITS: Record<string, number> = {
   TAX_IDENTIFIER_VERIFY: 1, // one GSTIN/PAN lookup
   BANK_ACCOUNT_VERIFY: 1, // one bank-account verification call
   AI_INSIGHT: 1, // one Anthropic dashboard-summary call (degrades to free rule-based insight instead of blocking)
+  ASSISTANT_MESSAGE: 1, // one assistant request (may involve several model round trips). Placeholder guess like the rest — tune against real token costs. A confirmed action (e.g. sync_gst) is a separate reservation, never folded into this one.
 };
 
 export function operationCost(operation: string): number {

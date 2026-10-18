@@ -25,6 +25,7 @@ export interface Env {
   FRONTEND_ORIGIN: string;
   INGEST_EMAIL_ADDRESS: string;
   AI_INSIGHTS_DAILY_BUDGET_USD: string;
+  ASSISTANT_MUTATIONS_ENABLED?: string; // "true" exposes the assistant's Phase 2 (confirm-first) tools; anything else keeps it read-only
 
   // --- secrets (`wrangler secret put <NAME>`) ---
   SUPABASE_JWT_SECRET: string;        // Settings > API > JWT Secret in Supabase

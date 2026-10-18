@@ -107,8 +107,10 @@ deployment docs / failure-safety / leakage — solid for what exists, not
 exhaustively tested; no full grep-audit of every log line for
 accidental secret leakage).
 
-❌ **Not done** — 18 (domain/DNS — needs real domain access), 28
-(natural-language action layer — a distinct feature, not started).
+❌ **Not done** — 18 (domain/DNS — needs real domain access).
+
+🟡 **28 (natural-language action layer) — backend built, not launched**:
+see the "Natural-language assistant" section below.
 
 🟡 Also now partial rather than untouched: 13 (backup/recovery —
 `BACKUP_RECOVERY.md` written, but it's a procedure to follow, not
@@ -533,6 +535,29 @@ is the short version.
 **Not done:** no automated alert on the usage-spike query (it's
 documented, not scheduled), no R2 versioning/replication configured, no
 actual restore test has been run (can't be, without a live project).
+
+## Natural-language assistant (new)
+
+Built to `WORKFLOW.md`'s design — read that file for the safety model. Phase
+1 (4 read-only tools) and Phase 2 (`sync_gst`, `soft_delete_document`,
+`restore_document`, each behind a signed single-use confirmation) are both
+implemented; Phase 2 is **off** (`ASSISTANT_MUTATIONS_ENABLED = "false"`).
+
+- **Verified:** `npx tsc --noEmit` clean; `npm test` — 51 tests (vitest)
+  covering sanitization, input validation, token tamper/expiry/tenant/replay,
+  tool-registry invariants (no identity args, no forbidden capabilities),
+  orchestration with a scripted — including deliberately compromised — model,
+  and HTTP-level credit/refund/rate/confirm behaviour; `wrangler deploy
+  --dry-run` bundles. The CI workflow now runs typecheck + tests before
+  deploying.
+- **Not verified:** nothing has run against a live model, live Postgres or
+  live Redis (route tests mock those). New SQL
+  (`searchDocumentsByInvoiceOrVendor`, `listByGSTStatus`'s `deleted_at`
+  filter) has only been type-checked and read, not run — run it once against
+  Supabase.
+- **Not built:** frontend chat UI; live adversarial prompt testing.
+- Extracted `src/actions/{gst,documents}.ts` so `POST /gst/sync` and
+  document trash/restore routes share one implementation with the assistant.
 
 ## Before you deploy
 
