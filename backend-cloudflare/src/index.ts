@@ -5,6 +5,7 @@ import type { TenantContext } from "./auth/supabase";
 import { withDb } from "./middleware/db";
 import { requestId, securityHeaders, corsMiddleware } from "./middleware/security";
 import { healthRoutes } from "./routes/health";
+import { KEEP_WARM_CRON, runKeepWarm } from "./warm";
 import { authRoutes } from "./routes/auth";
 import { documentRoutes } from "./routes/documents";
 import { reconciliationRoutes } from "./routes/reconciliation";
@@ -93,7 +94,20 @@ export default {
   // Cron Trigger (wrangler.toml: daily at 03:00) — replaces the
   // never-built EventBridge rule from ROADMAP.md for a daily
   // detect-missing-invoices sweep across every tenant.
-  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    // The 5-minute keep-warm tick (warm.ts) is NOT the daily sweep. Every
+    // cron in wrangler.toml lands in this one handler, so dispatch on which
+    // one fired — falling through would run the cross-tenant sweep and the
+    // retention purge every 5 minutes.
+    if (event.cron === KEEP_WARM_CRON) {
+      const result = await runKeepWarm(env, ctx);
+      console.log("keep_warm", result);
+      if (!result.database.ok) {
+        ctx.waitUntil(reportError(env, new Error("keep-warm: database unreachable"), { severity: "warning", tags: { area: "cron", job: "keep_warm" } }));
+      }
+      return;
+    }
+
     const sql = getDb(env);
     try {
       // system_context: this is the one legitimate place the Worker

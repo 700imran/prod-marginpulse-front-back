@@ -578,6 +578,36 @@ and `detail` as the message string. Success bodies are untouched. Checked: the
 hardening pass otherwise only *added* fields to success responses
 (`credits_remaining`) and preserved HTTP statuses.
 
+## Keeping the backend warm (new)
+
+Two layers, both built; neither has run against a deployed Worker yet.
+
+1. **Cloudflare cron, every 5 min** (`src/warm.ts`, `[triggers]` in
+   `wrangler.toml`): `select 1` + Redis `PING`. Keeps the Hyperdrive →
+   Supabase path and Upstash warm and counts as activity for Supabase's
+   free-tier inactivity pause. `scheduled()` now dispatches on `event.cron`,
+   so this tick can never run the tenant sweep or retention purge (pinned by
+   `test/keepwarm.test.ts`, mutation-checked). The cron string in
+   `wrangler.toml` must stay identical to `KEEP_WARM_CRON` (a test checks it).
+2. **External pinger** (`.github/workflows/keep-warm.yml`): hits
+   `<BACKEND_URL>/healthz` every ~5 min through the real public path, logs
+   time-to-first-byte, and fails the run (GitHub emails you) on non-200 or
+   timeout. Set repo variable `BACKEND_URL` (and optionally
+   `WARM_EXTRA_URLS`, one per line, for the Go/Lambda API) — it does nothing
+   until `BACKEND_URL` is set. GitHub's scheduler is best-effort (delays of
+   minutes) and disables itself after 60 days of repo inactivity.
+
+Honest limits: **Workers have no meaningful cold start** — this warms what's
+*behind* the Worker, which is where first-request slowness on this stack
+comes from. It does **not** warm the Go backend's AWS Lambdas: the API
+Lambda is only covered if its URL is added to `WARM_EXTRA_URLS`; the OCR
+container Lambda (SQS-triggered, loads the model on start) can't be pinged
+over HTTP — use provisioned concurrency or a warm-up event in
+`ocr-service/handler.py` if upload-time latency matters there.
+
+Also changed: `GET /healthz` no longer returns raw driver error text in its
+(unauthenticated) response — ok flags only; details go to the logs.
+
 ## Before you deploy
 
 1. Fix the GitHub repo's incomplete push if you still need the Go

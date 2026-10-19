@@ -118,7 +118,10 @@ max_retries = 3
 # Cron Triggers — replaces the never-built EventBridge rules from ROADMAP.md
 # ---------------------------------------------------------------------------
 [triggers]
-crons = ["0 3 * * *"]  # daily: detect-missing-invoices sweep across tenants
+# "0 3 * * *"  — daily: detect-missing-invoices sweep + retention purge
+# "*/5 * * * *" — keep-warm DB/Redis ping (src/warm.ts). MUST stay identical to
+#                 KEEP_WARM_CRON in src/warm.ts; index.ts dispatches on it.
+crons = ["0 3 * * *", "*/5 * * * *"]
 
 # ---------------------------------------------------------------------------
 # Non-secret env vars. Everything sensitive goes via `wrangler secret put`:

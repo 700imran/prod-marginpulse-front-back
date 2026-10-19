@@ -1,0 +1,77 @@
+# Pings the backend every ~5 minutes through its real public URL, so the full
+# request path (edge → Worker/Lambda → database → Redis) stays warm, and fails
+# loudly (GitHub emails the repo owner on a failing scheduled run) if the
+# backend is down or slow.
+#
+# Setup (once): repo → Settings → Secrets and variables → Actions → Variables
+#   BACKEND_URL      e.g. https://marginpulse-api.<account>.workers.dev
+#                    (no trailing slash; /healthz is appended)
+#   WARM_EXTRA_URLS  optional, one full URL per line — e.g. the Go/Lambda API's
+#                    health URL if that backend is also live
+# If BACKEND_URL is unset the job exits cleanly doing nothing.
+#
+# Caveats, honestly:
+#  * GitHub's scheduler is best-effort: runs can be delayed by several minutes
+#    under load, and the minimum interval is 5 minutes. The Cloudflare cron in
+#    wrangler.toml (src/warm.ts) is the reliable tick; this is the external
+#    view of the same thing plus alerting.
+#  * GitHub disables scheduled workflows after 60 days with no repository
+#    activity. A push, or running this workflow manually, re-enables it.
+name: Keep backend warm
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: keep-warm
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Ping backend
+        env:
+          BACKEND_URL: ${{ vars.BACKEND_URL }}
+          WARM_EXTRA_URLS: ${{ vars.WARM_EXTRA_URLS }}
+        run: |
+          set -u
+          if [ -z "${BACKEND_URL:-}" ] && [ -z "${WARM_EXTRA_URLS:-}" ]; then
+            echo "BACKEND_URL / WARM_EXTRA_URLS not set — nothing to ping."
+            exit 0
+          fi
+
+          urls=""
+          [ -n "${BACKEND_URL:-}" ] && urls="${BACKEND_URL%/}/healthz"
+          [ -n "${WARM_EXTRA_URLS:-}" ] && urls="$urls
+          $WARM_EXTRA_URLS"
+
+          fail=0
+          while IFS= read -r url; do
+            url="$(echo "$url" | tr -d '[:space:]')"
+            [ -z "$url" ] && continue
+            case "$url" in https://*) ;; *) echo "::error::refusing non-https URL: $url"; fail=1; continue;; esac
+
+            # First request may be the slow, cold one — that's the point. Give it
+            # 25s, retry twice, and report time-to-first-byte so slowness is
+            # visible in the run log even when the check passes.
+            if out=$(curl -sS -o /dev/null --max-time 25 --retry 2 --retry-delay 3 --retry-all-errors \
+                     -w '%{http_code} total=%{time_total}s connect=%{time_connect}s ttfb=%{time_starttransfer}s' "$url"); then
+              code="${out%% *}"
+              echo "$url -> $out"
+              if [ "$code" != "200" ]; then
+                echo "::error::$url returned HTTP $code"
+                fail=1
+              fi
+            else
+              echo "::error::$url unreachable, timed out, or kept returning an error status"
+              fail=1
+            fi
+          done <<< "$urls"
+
+          exit $fail

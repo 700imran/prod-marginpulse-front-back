@@ -297,6 +297,11 @@ a task list, not just prose:
 - [ ] New: tune `ASSISTANT_MESSAGE` credit cost and the 0.02 USD budget
       estimate in `routes/assistant.ts`.
 
+- [ ] New: **set the `BACKEND_URL` repo variable** (Settings → Secrets and
+      variables → Actions → Variables) so `.github/workflows/keep-warm.yml`
+      starts pinging; after the first deploy confirm a `keep_warm` log line
+      appears every 5 minutes (`wrangler tail`).
+
 ## Quick file map
 
 | Need to change... | Look in... |
