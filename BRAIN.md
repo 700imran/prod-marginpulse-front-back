@@ -108,7 +108,7 @@
 >   `backend-cloudflare/src/assistant/` + `src/routes/assistant.ts`; 51 tests
 >   (`npm test`) + SQL integration tests on real Postgres + frontend view
 >   (`AssistantView.jsx`). Still open: running the live red-team harness
->   (`test/assistant_redteam.live.test.ts`, never run), a browser click-through,
+>   (`test/assistant_redteam.live.test.ts`, never run), a real-browser click-through (jsdom component tests exist),
 >   and a smoke test on real Supabase. Read
 >   `backend-cloudflare/WORKFLOW.md` ("Implementation notes" / "What's still
 >   open") before changing anything here.

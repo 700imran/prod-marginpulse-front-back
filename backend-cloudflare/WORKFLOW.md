@@ -254,14 +254,20 @@ eyeball a few manual tries. At minimum:
   in `assistant/prompt.ts`, and re-run several times before trusting a pass.
   It has **never been run**. Keep `ASSISTANT_MUTATIONS_ENABLED = "false"`
   until it has, and until Phase 1 has been used.
-- **Frontend:** built and unit-tested (`assistantLogic.test.js`, 11 tests;
-  production build passes with lint warnings as errors) but never exercised
-  against a running backend or in a browser. The view renders all assistant
-  text and confirmation summaries as plain text; keep it that way.
+- **Frontend:** built; 20 jest tests (`assistantLogic.test.js` and
+  `AssistantView.test.jsx`, which drives the real component with a mocked API:
+  reply, confirm card, double-click safety, cancel, expiry, 402, plain-text
+  rendering, token never in history); production build passes with lint
+  warnings as errors. Never run in a real browser against a running backend.
+  The view renders all assistant text and confirmation summaries as plain
+  text; keep it that way.
 - **Pricing:** `ASSISTANT_MESSAGE` cost and the 0.02 USD per-message platform
   budget estimate are placeholder guesses.
-- **Role enforcement:** `team_members.role` is still unchecked everywhere, so
-  any team member can propose and confirm any assistant action their tenant
-  allows. Revisit when roles are enforced (a VIEWER shouldn't get Phase 2).
-  The assistant is visible in the nav to every user, including on tenants
-  with no GSTIN (it still works; `sync_gst` just refuses).
+- **Roles (not a gap today):** `team_members.role` isn't enforced anywhere,
+  but it also can't matter yet — `requireAuth` sets `tenantId = claims.sub`,
+  so each login is its own tenant and an accepted invite gives no access to
+  the inviter's data. If shared-tenant access is ever built, gate the
+  assistant's Phase 2 tools (propose *and* confirm) on role at that point
+  (a VIEWER shouldn't get them). The assistant is visible in the nav to every
+  user, including on tenants with no GSTIN (it still works; `sync_gst` just
+  refuses).

@@ -284,9 +284,9 @@ a task list, not just prose:
       (written, never run — see `WORKFLOW.md` → "What's still open"). Keep
       `ASSISTANT_MUTATIONS_ENABLED = "false"` until it passes and Phase 1 has
       been used.
-- [ ] New: click through the assistant in a browser against a running backend
-      (send, 402, confirm card, expiry) — the UI is built and unit-tested but
-      not yet exercised end to end.
+- [ ] New: click through the assistant in a real browser against a running
+      backend (send, 402, confirm card, expiry) — covered by jsdom component
+      tests only so far.
 - [ ] New: smoke-test the assistant's SQL on real Supabase (verified on local
       Postgres 16 only).
 - [ ] New: tune `ASSISTANT_MESSAGE` credit cost and the 0.02 USD budget

@@ -556,11 +556,11 @@ implemented; Phase 2 is **off** (`ASSISTANT_MUTATIONS_ENABLED = "false"`).
   injection-as-data, limit cap. Run against a local Postgres with a stubbed
   `auth` schema, not real Supabase — worth one smoke test there too.
 - **Frontend built:** `frontend/src/components/AssistantView.jsx` (nav item
-  "Assistant", Beta), helpers in `assistantLogic.js` (11 jest tests), API
+  "Assistant", Beta), helpers in `assistantLogic.js`; 20 jest tests incl. a component click-through (`AssistantView.test.jsx`), API
   calls in `api.js`; `npm run build` passes with `CI=true`.
 - **Not verified:** nothing has run against a live model or live Redis (route
-  tests mock them), and the frontend hasn't been used in a browser against a
-  running backend.
+  tests mock them), and the frontend has been exercised only through jsdom component tests,
+  not a real browser against a running backend.
 - **Not done:** the live adversarial run (`test/assistant_redteam.live.test.ts`
   is written, never executed).
 - Extracted `src/actions/{gst,documents}.ts` so `POST /gst/sync` and

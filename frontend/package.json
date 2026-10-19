@@ -28,5 +28,9 @@
       "last 1 chrome version",
       "last 1 firefox version"
     ]
+  },
+  "devDependencies": {
+    "@testing-library/dom": "^9.3.4",
+    "@testing-library/react": "^14.3.1"
   }
 }
