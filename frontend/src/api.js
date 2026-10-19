@@ -16,6 +16,7 @@
 import { supabase } from './supabaseClient';
 import { tokenManager } from './security/tokenManager';
 import { getOcrLines } from './ocr';
+import { normalizeErrorBody } from './apiErrors';
 
 const BASE = process.env.REACT_APP_API_URL || '';
 
@@ -50,7 +51,7 @@ async function request(method, path, body) {
     // Retry original request with the refreshed token
     return request(method, path, body);
   }
-  return res.json();
+  return normalizeErrorBody(await res.json());
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -106,7 +107,7 @@ export async function uploadDocument(file, docType = 'INVOICE') {
     headers: { Authorization: `Bearer ${getToken()}` },
     body: form,
   });
-  return res.json();
+  return normalizeErrorBody(await res.json());
 }
 
 // ── Bank CSV ──────────────────────────────────────────────────────────────────
@@ -118,7 +119,7 @@ export async function uploadBankCSV(file, bankName = '') {
     headers: { Authorization: `Bearer ${getToken()}` },
     body: form,
   });
-  return res.json();
+  return normalizeErrorBody(await res.json());
 }
 
 // ── Reconciliation ────────────────────────────────────────────────────────────

@@ -253,6 +253,11 @@ a task list, not just prose:
       `{error: "..."}`. The frontend needs updating wherever it reads
       `err.error` as a string, and `credits_remaining` moved under
       `error.details` for the two `INSUFFICIENT_CREDITS` responses.
+      **Done for the error body:** `frontend/src/apiErrors.js` normalizes it
+      inside `api.js` (`error` and `detail` become the message string; the
+      structured fields stay as `error_code`/`request_id`/`error_details`),
+      so every existing view's toast keeps working. Nothing in the frontend
+      reads `credits_remaining`, so that move is harmless today.
 - [ ] New: no repository/pipeline code throws `AppError` yet — every
       route still does its own `if (!x) return apiError(...)` check.
       Worth doing where a failure can happen several calls deep and

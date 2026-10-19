@@ -566,6 +566,18 @@ implemented; Phase 2 is **off** (`ASSISTANT_MUTATIONS_ENABLED = "false"`).
 - Extracted `src/actions/{gst,documents}.ts` so `POST /gst/sync` and
   document trash/restore routes share one implementation with the assistant.
 
+## Frontend compatibility with the new error format (fixed)
+
+The hardening pass changed every error body to
+`{success:false, error:{code,message,requestId,details?}}`; existing views read
+`result.error` as a string (GSTSyncView, DashboardView) or `result.detail`
+(~10 others) and pass it to a toast — which would have received an object.
+`frontend/src/apiErrors.js` (`normalizeErrorBody`, 4 tests) now converts it in
+`api.js`'s `request()`, document upload and bank-CSV upload, keeping `error`
+and `detail` as the message string. Success bodies are untouched. Checked: the
+hardening pass otherwise only *added* fields to success responses
+(`credits_remaining`) and preserved HTTP statuses.
+
 ## Before you deploy
 
 1. Fix the GitHub repo's incomplete push if you still need the Go
