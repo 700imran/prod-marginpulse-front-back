@@ -7,8 +7,10 @@ confirm, prompt, llm, service), `src/routes/assistant.ts`,
 the assistant both call). Tests: `test/assistant_*.test.ts` (`npm test`).
 Phase 2 is gated by `ASSISTANT_MUTATIONS_ENABLED` in `wrangler.toml`
 (`"false"` — flip to `"true"` once Phase 1 has been live and used, per the
-rollout order below). **Not done:** the frontend chat UI, and adversarial
-testing against the live model — see "What's still open" at the bottom. The
+rollout order below). The frontend chat UI is built
+(`frontend/src/components/AssistantView.jsx`). **Not done:** adversarial
+testing against the live model (a ready-to-run harness exists) — see "What's
+still open" at the bottom. The
 design below is unchanged; it is what the code was built to.
 
 ## Why this needs a plan before code
@@ -243,15 +245,23 @@ eyeball a few manual tries. At minimum:
 
 ## What's still open
 
-- **Adversarial testing against the real model** (open question 1 above).
-  The tests prove the *server-side* boundary holds even when the model is
-  scripted to misbehave; they cannot prove the model behaves. Red-team
-  `assistant/prompt.ts` against live model output before enabling for users.
-- **Frontend:** no chat UI exists. It must handle `402 INSUFFICIENT_CREDITS`,
-  the `confirm_action` → confirm/cancel button → `/confirm` flow, and render
-  summaries/messages as plain text.
+- **Run the live red-team** (open question 1 above). The deterministic tests
+  prove the *server-side* boundary holds even when the model is scripted to
+  misbehave; they cannot prove the model behaves. Harness:
+  `ANTHROPIC_API_KEY=... npx vitest run test/assistant_redteam.live` (11
+  cases: poisoned vendor names, forbidden requests, forged history, plus a
+  positive control). Non-deterministic — treat a failure as a finding to fix
+  in `assistant/prompt.ts`, and re-run several times before trusting a pass.
+  It has **never been run**. Keep `ASSISTANT_MUTATIONS_ENABLED = "false"`
+  until it has, and until Phase 1 has been used.
+- **Frontend:** built and unit-tested (`assistantLogic.test.js`, 11 tests;
+  production build passes with lint warnings as errors) but never exercised
+  against a running backend or in a browser. The view renders all assistant
+  text and confirmation summaries as plain text; keep it that way.
 - **Pricing:** `ASSISTANT_MESSAGE` cost and the 0.02 USD per-message platform
   budget estimate are placeholder guesses.
 - **Role enforcement:** `team_members.role` is still unchecked everywhere, so
   any team member can propose and confirm any assistant action their tenant
   allows. Revisit when roles are enforced (a VIEWER shouldn't get Phase 2).
+  The assistant is visible in the nav to every user, including on tenants
+  with no GSTIN (it still works; `sync_gst` just refuses).

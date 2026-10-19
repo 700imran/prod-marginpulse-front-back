@@ -550,12 +550,19 @@ implemented; Phase 2 is **off** (`ASSISTANT_MUTATIONS_ENABLED = "false"`).
   and HTTP-level credit/refund/rate/confirm behaviour; `wrangler deploy
   --dry-run` bundles. The CI workflow now runs typecheck + tests before
   deploying.
-- **Not verified:** nothing has run against a live model, live Postgres or
-  live Redis (route tests mock those). New SQL
-  (`searchDocumentsByInvoiceOrVendor`, `listByGSTStatus`'s `deleted_at`
-  filter) has only been type-checked and read, not run — run it once against
-  Supabase.
-- **Not built:** frontend chat UI; live adversarial prompt testing.
+- **New SQL verified against real Postgres 16** loaded with `db/schema.sql`
+  (`test/assistant_sql.integration.test.ts`, run with `PG_TEST_URL=...`;
+  skipped otherwise): tenant scoping, trash exclusion, literal `%`/`_`,
+  injection-as-data, limit cap. Run against a local Postgres with a stubbed
+  `auth` schema, not real Supabase — worth one smoke test there too.
+- **Frontend built:** `frontend/src/components/AssistantView.jsx` (nav item
+  "Assistant", Beta), helpers in `assistantLogic.js` (11 jest tests), API
+  calls in `api.js`; `npm run build` passes with `CI=true`.
+- **Not verified:** nothing has run against a live model or live Redis (route
+  tests mock them), and the frontend hasn't been used in a browser against a
+  running backend.
+- **Not done:** the live adversarial run (`test/assistant_redteam.live.test.ts`
+  is written, never executed).
 - Extracted `src/actions/{gst,documents}.ts` so `POST /gst/sync` and
   document trash/restore routes share one implementation with the assistant.
 

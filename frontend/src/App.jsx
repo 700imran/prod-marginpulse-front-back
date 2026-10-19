@@ -25,6 +25,7 @@ const TeamView = lazy(() => import("./components/TeamView"));
 const AdminPanelView = lazy(() => import("./components/AdminPanelView"));
 const ROICalculatorView = lazy(() => import("./components/ROICalculatorView"));
 const AuditLogView = lazy(() => import("./components/AuditLogView"));
+const AssistantView = lazy(() => import("./components/AssistantView"));
 
 function initials(name) {
   if (!name) return "??";
@@ -81,6 +82,7 @@ function AppShell() {
       case "security": return <SecurityView onToast={showToast} />;
       case "roi": return <ROICalculatorView />;
       case "auditlog": return <AuditLogView />;
+      case "assistant": return <AssistantView onNavigate={setActiveNav} />;
       case "billing": return <BillingView tenant={tenant} />;
       case "team": return <TeamView onToast={showToast} />;
       case "admin": return <AdminPanelView onToast={showToast} />;

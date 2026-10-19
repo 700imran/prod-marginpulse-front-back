@@ -365,3 +365,41 @@ export async function setTenantActive(tenantId, isActive) {
 export async function getSystemStats() {
   return request('GET', '/api/v1/admin/stats');
 }
+
+// ── Assistant ─────────────────────────────────────────────────────────────────
+// Unlike request() above (which returns only the parsed body), the assistant
+// UI needs the HTTP status — 402 / 409 / 429 / 501 each mean something
+// different to the user — so these return { status, body }. Error bodies
+// follow the backend envelope: { error: { code, message, details? } }.
+async function requestWithStatus(method, path, body, retried = false) {
+  let res;
+  try {
+    res = await fetch(`${BASE}${path}`, {
+      method,
+      headers: authHeaders(),
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch {
+    return { status: 0, body: null }; // network failure
+  }
+  if (res.status === 401 && !retried) {
+    const { data, error } = await supabase.auth.refreshSession();
+    if (error || !data?.session) {
+      tokenManager.clearTokens();
+      window.location.href = '/';
+      return { status: 401, body: null };
+    }
+    return requestWithStatus(method, path, body, true);
+  }
+  let parsed = null;
+  try { parsed = await res.json(); } catch { /* empty / non-JSON body */ }
+  return { status: res.status, body: parsed };
+}
+
+export function assistantMessage(message, conversationHistory) {
+  return requestWithStatus('POST', '/api/v1/assistant/message', { message, conversation_history: conversationHistory });
+}
+
+export function assistantConfirm(confirmationToken) {
+  return requestWithStatus('POST', '/api/v1/assistant/confirm', { confirmation_token: confirmationToken });
+}

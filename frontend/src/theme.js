@@ -286,6 +286,7 @@ export const NAV_SECTIONS = [
       { id: "dashboard", label: "Dashboard", icon: <Icons.Dashboard /> },
       { id: "documents", label: "Documents Matrix", icon: <Icons.Documents /> },
       { id: "gst", label: "Tax Portal Sync", icon: <Icons.Sync />, badge: "Pro", badgeClass: "badge-pro" },
+      { id: "assistant", label: "Assistant", icon: <Icons.Lightning />, badge: "Beta", badgeClass: "badge-growth" },
       { id: "roi", label: "ROI Calculator", icon: <Icons.Lightning /> },
     ],
   },

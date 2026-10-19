@@ -106,8 +106,10 @@
 >   Phase 1 (read-only) and Phase 2 (confirm-first mutations, flag
 >   `ASSISTANT_MUTATIONS_ENABLED`, default off) live in
 >   `backend-cloudflare/src/assistant/` + `src/routes/assistant.ts`; 51 tests
->   (`npm test`). Still open: frontend chat UI, red-teaming the prompt against
->   the live model, running the new SQL against Supabase. Read
+>   (`npm test`) + SQL integration tests on real Postgres + frontend view
+>   (`AssistantView.jsx`). Still open: running the live red-team harness
+>   (`test/assistant_redteam.live.test.ts`, never run), a browser click-through,
+>   and a smoke test on real Supabase. Read
 >   `backend-cloudflare/WORKFLOW.md` ("Implementation notes" / "What's still
 >   open") before changing anything here.
 
