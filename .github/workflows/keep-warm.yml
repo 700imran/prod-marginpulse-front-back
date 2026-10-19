@@ -1,13 +1,13 @@
 # Pings the backend every ~5 minutes through its real public URL, so the full
-# request path (edge → Worker/Lambda → database → Redis) stays warm, and fails
+# request path (edge → Cloudflare Worker → database → Redis) stays warm, and fails
 # loudly (GitHub emails the repo owner on a failing scheduled run) if the
 # backend is down or slow.
 #
 # Setup (once): repo → Settings → Secrets and variables → Actions → Variables
 #   BACKEND_URL      e.g. https://marginpulse-api.<account>.workers.dev
 #                    (no trailing slash; /healthz is appended)
-#   WARM_EXTRA_URLS  optional, one full URL per line — e.g. the Go/Lambda API's
-#                    health URL if that backend is also live
+#   WARM_EXTRA_URLS  optional, one full https URL per line, for anything else
+#                    you want pinged (e.g. a second environment)
 # If BACKEND_URL is unset the job exits cleanly doing nothing.
 #
 # Caveats, honestly:

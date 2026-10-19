@@ -593,17 +593,14 @@ Two layers, both built; neither has run against a deployed Worker yet.
    `<BACKEND_URL>/healthz` every ~5 min through the real public path, logs
    time-to-first-byte, and fails the run (GitHub emails you) on non-200 or
    timeout. Set repo variable `BACKEND_URL` (and optionally
-   `WARM_EXTRA_URLS`, one per line, for the Go/Lambda API) — it does nothing
+   `WARM_EXTRA_URLS`, one https URL per line, for anything else) — it does nothing
    until `BACKEND_URL` is set. GitHub's scheduler is best-effort (delays of
    minutes) and disables itself after 60 days of repo inactivity.
 
-Honest limits: **Workers have no meaningful cold start** — this warms what's
-*behind* the Worker, which is where first-request slowness on this stack
-comes from. It does **not** warm the Go backend's AWS Lambdas: the API
-Lambda is only covered if its URL is added to `WARM_EXTRA_URLS`; the OCR
-container Lambda (SQS-triggered, loads the model on start) can't be pinged
-over HTTP — use provisioned concurrency or a warm-up event in
-`ocr-service/handler.py` if upload-time latency matters there.
+Honest limit: **Workers have no meaningful cold start** — this warms what's
+*behind* the Worker (Hyperdrive/Supabase, Upstash), which is where
+first-request slowness on this stack comes from. It can't make the Worker
+itself "warmer".
 
 Also changed: `GET /healthz` no longer returns raw driver error text in its
 (unauthenticated) response — ok flags only; details go to the logs.
