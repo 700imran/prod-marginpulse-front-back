@@ -16,9 +16,22 @@ export const reconciliationRoutes = new Hono<{ Bindings: Env; Variables: { sql: 
 reconciliationRoutes.use("*", requireAuth);
 
 // GET /reconciliation/dashboard-summary — mirrors HandleDashboardSummary.
+// ?insight=false returns just the numbers: no AI paragraph, no credit spent,
+// and no waiting on the model — what the dashboard uses to paint immediately.
+// Without it the response is unchanged (includes plainEnglishInsight).
 reconciliationRoutes.get("/dashboard-summary", async (c) => {
-  const summary = await buildDashboardSummary(c.get("sql"), c.env, c.get("tenant"));
+  const insightParam = c.req.query("insight");
+  const includeInsight = !(insightParam === "false" || insightParam === "0");
+  const summary = await buildDashboardSummary(c.get("sql"), c.env, c.get("tenant"), { includeInsight });
   return c.json(summary);
+});
+
+// GET /reconciliation/dashboard-insight — only the AI paragraph, so the
+// dashboard can load it after the numbers are already on screen. Cached per
+// tenant per distinct set of numbers (see pipelines/dashboard.ts).
+reconciliationRoutes.get("/dashboard-insight", async (c) => {
+  const summary = await buildDashboardSummary(c.get("sql"), c.env, c.get("tenant"));
+  return c.json({ plainEnglishInsight: summary.plainEnglishInsight });
 });
 
 // GET /reconciliation/dashboard-insights — mirrors HandleDashboardInsights.

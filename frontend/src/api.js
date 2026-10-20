@@ -17,6 +17,7 @@ import { supabase } from './supabaseClient';
 import { tokenManager } from './security/tokenManager';
 import { getOcrLines } from './ocr';
 import { normalizeErrorBody } from './apiErrors';
+import { setUserIdGetter, userIdFromToken } from './apiCache';
 
 const BASE = process.env.REACT_APP_API_URL || '';
 
@@ -32,12 +33,50 @@ function authHeaders() {
   };
 }
 
+// Lets apiCache namespace cached data by user without importing tokenManager.
+setUserIdGetter(() => { const t = getToken(); return t ? userIdFromToken(t) : null; });
+
+// A sleeping backend / database can take several seconds to answer the first
+// request. For READS (GET) that is safe to wait out and safe to retry, so:
+// give each attempt a generous timeout and retry once or twice on a network
+// failure, timeout or 502/503/504. Writes (POST/PUT/DELETE) are never
+// retried automatically — repeating one could do the thing twice — and keep
+// their original no-timeout behaviour (uploads can legitimately be slow).
+// Exported (mutable) only so tests can shrink the waits; app code never changes it.
+export const _retryConfig = { timeoutMs: 20000, delaysMs: [600, 1500] };
+const RETRYABLE_STATUS = new Set([502, 503, 504]);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function fetchWithRetry(url, init, isRead) {
+  const attempts = isRead ? _retryConfig.delaysMs.length + 1 : 1;
+  let lastError;
+  for (let i = 0; i < attempts; i++) {
+    const controller = isRead ? new AbortController() : null;
+    const timer = controller ? setTimeout(() => controller.abort(), _retryConfig.timeoutMs) : null;
+    try {
+      const res = await fetch(url, controller ? { ...init, signal: controller.signal } : init);
+      if (isRead && RETRYABLE_STATUS.has(res.status) && i < attempts - 1) {
+        lastError = new Error(`HTTP ${res.status}`);
+      } else {
+        return res;
+      }
+    } catch (e) {
+      lastError = e; // network failure or timeout (AbortError)
+      if (i === attempts - 1) throw e;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+    await sleep(_retryConfig.delaysMs[i]);
+  }
+  throw lastError;
+}
+
 async function request(method, path, body) {
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetchWithRetry(`${BASE}${path}`, {
     method,
     headers: authHeaders(),
     ...(body ? { body: JSON.stringify(body) } : {}),
-  });
+  }, method === 'GET');
   if (res.status === 401) {
     // Try Supabase's own refresh (it also auto-refreshes in the
     // background, but this covers the case where a request landed
@@ -73,6 +112,18 @@ export function isLoggedIn() {
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 export async function getDashboard(period = '2026-Q2') {
   return request('GET', `/api/v1/reconciliation/dashboard-summary?tax_period=${period}`);
+}
+
+// Numbers only — no AI paragraph, no credit spent, no waiting on the model.
+// This is what lets the dashboard paint immediately.
+export async function getDashboardFast(period = '2026-Q2') {
+  return request('GET', `/api/v1/reconciliation/dashboard-summary?tax_period=${period}&insight=false`);
+}
+
+// Just the AI paragraph, fetched after the numbers are already on screen.
+// The backend caches it per tenant per set of numbers.
+export async function getDashboardInsightText() {
+  return request('GET', '/api/v1/reconciliation/dashboard-insight');
 }
 
 // ── Documents ─────────────────────────────────────────────────────────────────
@@ -137,7 +188,7 @@ export async function resolveAnomaly(anomalyId) {
 
 // ── Dashboard insights (ITC risk, vendor follow-up, filing deadlines) ─────────
 export async function getDashboardInsights() {
-  return request('GET', '/api/v1/dashboard/insights');
+  return request('GET', '/api/v1/reconciliation/dashboard-insights');
 }
 
 // ── Missing invoice detection ─────────────────────────────────────────────────
@@ -188,7 +239,7 @@ export async function getAuditLog(entityType, entityId, limit = 100) {
 
 // ── ROI calculator (public — no auth required, works for marketing site too) ─
 export async function calculateROI(payload) {
-  return request('POST', '/api/v1/roi-calculator', payload);
+  return request('POST', '/api/v1/roi', payload);
 }
 
 // ── GST ───────────────────────────────────────────────────────────────────────
@@ -227,11 +278,25 @@ export async function updateProfile(fields) {
   return request('PATCH', '/api/v1/auth/me', fields);
 }
 
+// Password changes go through Supabase Auth directly — the Worker has no
+// password endpoint (auth is Supabase's job end to end). Supabase's
+// updateUser() doesn't ask for the current password, so we verify it first
+// ourselves: an unattended or hijacked session shouldn't be able to set a new
+// one without knowing the old. Returns the same { detail } shape the Security
+// screen already reads.
 export async function changePassword(currentPassword, newPassword) {
-  return request('POST', '/api/v1/auth/change-password', {
-    current_password: currentPassword,
-    new_password: newPassword,
-  });
+  const { data } = await supabase.auth.getSession();
+  const user = data?.session?.user;
+  if (!user?.email) return { detail: 'Your session has expired. Please log in again.' };
+  const providers = user.app_metadata?.providers || [];
+  if (providers.length > 0 && !providers.includes('email')) {
+    return { detail: "This account signs in with Google, so it doesn't have a password to change." };
+  }
+  const { error: wrongPassword } = await supabase.auth.signInWithPassword({ email: user.email, password: currentPassword });
+  if (wrongPassword) return { detail: 'Current password is incorrect' };
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) return { detail: error.message || 'Could not change password' };
+  return { detail: 'Password changed successfully' };
 }
 
 // ── Tax Identifiers (GSTIN / PAN) ──────────────────────────────────────────────

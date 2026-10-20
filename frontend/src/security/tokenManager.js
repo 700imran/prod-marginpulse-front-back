@@ -17,6 +17,7 @@
  * intentional, not a placeholder.
  */
 import { supabase } from '../supabaseClient';
+import { clearAllCaches } from '../apiCache';
 
 class TokenManager {
   constructor() {
@@ -33,7 +34,7 @@ class TokenManager {
     supabase.auth.onAuthStateChange((event, session) => {
       this.currentSession = session;
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') this.notifyStateChange('LOGIN');
-      else if (event === 'SIGNED_OUT') this.notifyStateChange('LOGOUT');
+      else if (event === 'SIGNED_OUT') { clearAllCaches(); this.notifyStateChange('LOGOUT'); } // also covers sign-out from another tab / expiry
     });
   }
 
@@ -85,6 +86,7 @@ class TokenManager {
    */
   clearTokens() {
     this.currentSession = null;
+    clearAllCaches(); // cached dashboard/profile data must not outlive the session
     this.notifyStateChange('LOGOUT');
     supabase.auth.signOut().catch((e) => console.error('[TokenManager] supabase signOut failed', e));
     return true;

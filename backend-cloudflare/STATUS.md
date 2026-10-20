@@ -605,6 +605,48 @@ itself "warmer".
 Also changed: `GET /healthz` no longer returns raw driver error text in its
 (unauthenticated) response — ok flags only; details go to the logs.
 
+## Dashboard load speed + broken routes (new)
+
+**Why the dashboard looked empty.** `DashboardView` awaited five requests
+together and rendered only "Loading dashboard…" until the slowest finished, so
+buttons and features were hidden too. Worse: `dashboard-summary` made a live
+Anthropic call, spent a credit, and ran six queries one after another on every
+visit; and if any request threw (e.g. timeout while the database woke up) the
+page never stopped loading.
+
+**What changed**
+- *Frontend:* page shell, buttons and skeleton placeholders paint immediately;
+  each section (`useDashboardData.js`) fills in as its own request returns; a
+  failed part shows a retry for that part only; a "still connecting" note after
+  4 s; last visit's numbers are shown instantly from a per-user cache
+  (`apiCache.js`: 24 h expiry, wiped on logout/sign-out, only re-saved from live
+  responses). GET requests now time out at 20 s and retry twice on network
+  failure/502/503/504 (writes are never auto-retried). The dashboard is bundled
+  with the app shell and other pages preload when idle.
+- *Backend:* `GET /reconciliation/dashboard-summary?insight=false` returns just
+  the numbers (no AI call, no credit); the AI paragraph moved to
+  `GET /reconciliation/dashboard-insight` and is cached per tenant per distinct
+  set of numbers for 6 h (unchanged numbers = no call, no credit — previously
+  every visit spent one). Without the flag the summary endpoint behaves as
+  before. The independent reads are issued together (pipelined on the one
+  connection) instead of back to back.
+- *Cached data is business data in the browser's localStorage* (summary figures,
+  open anomalies, profile incl. email/GSTIN). It is keyed by user id, expires
+  in 24 h and is cleared on logout — but on a shared computer where someone
+  closes the tab without logging out it stays until expiry. Say if you'd rather
+  trade the instant paint for sessionStorage.
+
+**Routes the React app called that the Worker didn't serve** (all left over from
+the Go backend; each was a feature that silently never worked):
+`GET /api/v1/dashboard/insights` → fixed path (this is why the risk chart and
+priorities panel were always empty); `GET /api/v1/audit-log` → new route;
+`POST /bank-accounts/:id/reverify` → new route (mirrors tax-identifier
+re-verify: credits, PENDING, queue); `POST /roi-calculator` → fixed path to
+`/api/v1/roi`; `POST /auth/change-password` → now done through Supabase Auth
+(re-checks the current password first; Google-only accounts get an explanation).
+`test/api_contract.test.ts` now fails if any frontend API call lacks a Worker
+route, and a new `ci.yml` runs backend + frontend checks on every PR.
+
 ## Before you deploy
 
 1. Fix the GitHub repo's incomplete push if you still need the Go

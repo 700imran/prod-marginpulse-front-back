@@ -1,0 +1,57 @@
+# Checks on every pull request and push to main — both halves of the app, so a
+# frontend change that drifts from the Worker's API (see
+# backend-cloudflare/test/api_contract.test.ts) is caught before merge.
+# Deploying is a separate workflow (deploy-worker.yml); this one never deploys.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend-cloudflare
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend-cloudflare/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      # Includes the frontend↔Worker API contract test, which reads ../frontend/src/api.js.
+      # (SQL integration and live red-team tests skip themselves without PG_TEST_URL / ANTHROPIC_API_KEY.)
+      - run: npm test
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test -- --watchAll=false
+        env:
+          CI: "true"
+      # CI=true makes lint warnings fail the build, matching Vercel's behaviour.
+      - run: npm run build
+        env:
+          CI: "true"
+          REACT_APP_SUPABASE_URL: https://placeholder.supabase.co
+          REACT_APP_SUPABASE_ANON_KEY: placeholder

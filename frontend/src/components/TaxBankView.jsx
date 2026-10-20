@@ -127,6 +127,8 @@ export default function TaxBankView({ onToast }) {
     if (result?.bankAccountId) {
       setBankAccounts((prev) => prev.map((b) => (b.bankAccountId === id ? result : b)));
       onToast?.("Re-verification started", "success");
+    } else {
+      onToast?.(result?.error || result?.detail || "Could not start re-verification", "error");
     }
   }
 

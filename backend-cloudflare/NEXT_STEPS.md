@@ -302,6 +302,16 @@ a task list, not just prose:
       starts pinging; after the first deploy confirm a `keep_warm` log line
       appears every 5 minutes (`wrangler tail`).
 
+- [ ] New: **time the dashboard on the real deployment** (cold and warm, e.g.
+      Chrome DevTools → Network, throttled to Fast 3G): the changes are
+      verified by tests, but the actual seconds haven't been measured. Expect
+      the first paint to be instant; numbers arrive as the database answers.
+- [ ] New: decide localStorage vs sessionStorage for the dashboard cache (see
+      STATUS.md → "Dashboard load speed").
+- [ ] New: Dashboard AI insight credit: the insight is now cached
+      per distinct numbers; if you'd rather it never spend credits on page
+      views at all, make `/dashboard-insight` opt-in from the UI.
+
 ## Quick file map
 
 | Need to change... | Look in... |

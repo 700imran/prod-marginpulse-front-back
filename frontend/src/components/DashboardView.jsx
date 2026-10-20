@@ -9,18 +9,24 @@
  * presence) rather than a fixed "have you clicked this before" flag, so
  * it always reflects actual account state even across devices/browsers.
  */
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { StatusDonut, RiskBarChart } from "./charts";
 import {
-  getDashboard, listAnomalies, resolveAnomaly, uploadDocument, triggerReconciliation,
-  listBankAccounts, listTaxIdentifiers, getDashboardInsights, downloadReconciliationReport,
+  resolveAnomaly, uploadDocument, triggerReconciliation, downloadReconciliationReport,
   detectMissingInvoices,
 } from "../api";
+import { useDashboardData } from "./useDashboardData";
 
-function StatCard({ value, label, accent }) {
+function Skeleton({ width = "100%", height = 14, style }) {
+  return <div className="skeleton" style={{ width, height, ...style }} aria-hidden="true" />;
+}
+
+function StatCard({ value, label, accent, loading }) {
   return (
     <div className="card" style={{ flex: 1, borderTop: `3px solid ${accent}`, marginBottom: 0 }}>
-      <div style={{ fontSize: 30, fontWeight: 800, color: "var(--text-dark)", lineHeight: 1 }}>{value}</div>
+      {loading
+        ? <Skeleton width={60} height={30} />
+        : <div style={{ fontSize: 30, fontWeight: 800, color: "var(--text-dark)", lineHeight: 1 }}>{value}</div>}
       <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-gray)", marginTop: 6 }}>{label}</div>
     </div>
   );
@@ -42,11 +48,12 @@ function formatINR(amount) {
  * from the mismatch-count stat cards above: those answer "what didn't
  * match", this answers "what should I act on right now".
  */
-function InsightsSection({ insights, onExport, onDetectMissing, detecting }) {
-  if (!insights) return null;
-  const risk = insights.highestItcRiskToday || [];
-  const vendors = insights.vendorsRequiringFollowUp || [];
-  const deadlines = insights.filingDeadlines || [];
+function InsightsSection({ insights, loading, failed, onRetry, onExport, onDetectMissing, detecting }) {
+  // The card and its two action buttons render immediately — they don't depend
+  // on the insights data — and only the body below waits for it.
+  const risk = insights?.highestItcRiskToday || [];
+  const vendors = insights?.vendorsRequiringFollowUp || [];
+  const deadlines = insights?.filingDeadlines || [];
 
   return (
     <div className="card">
@@ -54,7 +61,10 @@ function InsightsSection({ insights, onExport, onDetectMissing, detecting }) {
         <div>
           <h3 style={{ fontSize: 18, marginBottom: 4 }}>Today's Priorities</h3>
           <p style={{ fontSize: 13, color: "var(--text-gray)" }}>
-            Estimated recoverable ITC: <strong style={{ color: "var(--text-dark)" }}>{formatINR(insights.estimatedRecoverableItc)}</strong>
+            Estimated recoverable ITC:{" "}
+            {insights
+              ? <strong style={{ color: "var(--text-dark)" }}>{formatINR(insights.estimatedRecoverableItc)}</strong>
+              : <span className="skeleton" style={{ display: "inline-block", width: 70, height: 12, verticalAlign: "middle" }} aria-hidden="true" />}
           </p>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
@@ -65,7 +75,25 @@ function InsightsSection({ insights, onExport, onDetectMissing, detecting }) {
         </div>
       </div>
 
-      {deadlines.length > 0 && (
+      {!insights && failed && (
+        <div className="notice-bar error">
+          <span>Couldn't load today's priorities.</span>
+          <button className="btn btn-ghost" onClick={onRetry}>Try again</button>
+        </div>
+      )}
+      {!insights && !failed && (
+        <div className="grid-2" style={{ gap: 20 }} aria-busy="true">
+          {[0, 1].map((i) => (
+            <div key={i}>
+              <Skeleton width="45%" height={14} style={{ marginBottom: 14 }} />
+              <Skeleton height={12} style={{ marginBottom: 10 }} />
+              <Skeleton width="85%" height={12} style={{ marginBottom: 10 }} />
+              <Skeleton width="70%" height={12} />
+            </div>
+          ))}
+        </div>
+      )}
+      {insights && deadlines.length > 0 && (
         <div style={{ display: "flex", gap: 12, marginBottom: 20, flexWrap: "wrap" }}>
           {deadlines.map((d) => (
             <div
@@ -87,6 +115,7 @@ function InsightsSection({ insights, onExport, onDetectMissing, detecting }) {
         </div>
       )}
 
+      {insights && (
       <div className="grid-2" style={{ gap: 20 }}>
         <div>
           <h4 style={{ fontSize: 14, marginBottom: 10, color: "var(--text-gray)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
@@ -121,6 +150,7 @@ function InsightsSection({ insights, onExport, onDetectMissing, detecting }) {
           ))}
         </div>
       </div>
+      )}
     </div>
   );
 }
@@ -217,40 +247,25 @@ function OnboardingGuide({ steps, allDone, onDismiss }) {
 }
 
 export default function DashboardView({ onToast, tenant, onNavigate }) {
-  const [summary, setSummary] = useState(null);
-  const [anomalies, setAnomalies] = useState([]);
-  const [bankAccountCount, setBankAccountCount] = useState(null);
-  const [taxIdentifierCount, setTaxIdentifierCount] = useState(null);
-  const [insights, setInsights] = useState(null);
+  // Each part of the page loads independently — see useDashboardData.js.
+  const { data, failed, slow, refresh, removeAnomaly } = useDashboardData();
+  const { summary, anomalies, bankAccountCount, taxIdentifierCount, insights, insightText } = data;
   const [detecting, setDetecting] = useState(false);
-  const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [guideHidden, setGuideHidden] = useState(() => localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "1");
-
-  async function refresh() {
-    const [dash, anom, bankAccounts, taxIds, dashInsights] = await Promise.all([
-      getDashboard(),
-      listAnomalies("OPEN"),
-      listBankAccounts(),
-      listTaxIdentifiers(),
-      getDashboardInsights(),
-    ]);
-    if (dash?.summaryMetrics) setSummary(dash);
-    if (anom?.items) setAnomalies(anom.items);
-    if (Array.isArray(bankAccounts)) setBankAccountCount(bankAccounts.length);
-    if (Array.isArray(taxIds)) setTaxIdentifierCount(taxIds.length);
-    if (dashInsights?.generatedAt) setInsights(dashInsights);
-    setLoading(false);
-  }
-
-  useEffect(() => { refresh(); }, []);
 
   async function handleFileUpload(e) {
     const file = e.target.files?.[0];
     if (!file) return;
     setUploading(true);
-    const result = await uploadDocument(file, "INVOICE");
-    setUploading(false);
+    let result = null;
+    try {
+      result = await uploadDocument(file, "INVOICE");
+    } catch {
+      result = null; // network failure — fall through to the error toast below
+    } finally {
+      setUploading(false);
+    }
     e.target.value = "";
     // The Cloudflare backend returns the created document row directly
     // (documentId) — OCR already ran client-side and finished before
@@ -270,16 +285,19 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
   async function handleResolve(anomalyId) {
     const result = await resolveAnomaly(anomalyId);
     if (result?.status === "RESOLVED") {
-      setAnomalies((prev) => prev.filter((a) => a.anomalyId !== anomalyId));
+      removeAnomaly(anomalyId);
       onToast?.("Anomaly resolved", "success");
     }
   }
 
   async function handleRunReconciliation() {
-    const result = await triggerReconciliation();
+    let result = null;
+    try { result = await triggerReconciliation(); } catch { result = null; }
     if (result?.job_id) {
       onToast?.(`Reconciliation queued for ${result.documents_queued} documents`, "success");
       setTimeout(refresh, 3000);
+    } else {
+      onToast?.(result?.error || result?.detail || "Could not start reconciliation", "error");
     }
   }
 
@@ -310,9 +328,10 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
     setGuideHidden(true);
   }
 
-  if (loading) return <div className="card"><p style={{ color: "var(--text-gray)" }}>Loading dashboard…</p></div>;
-
   const m = summary?.summaryMetrics || {};
+  const summaryReady = summary !== null;
+  const anomaliesReady = anomalies !== null;
+  const guideReady = summaryReady && bankAccountCount !== null && taxIdentifierCount !== null; // avoid showing steps as "not done" then flipping
 
   const hasDocuments = (m.totalUploadedDocuments ?? 0) > 0;
   const hasBankAccount = (bankAccountCount ?? 0) > 0;
@@ -353,10 +372,24 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
     },
   ];
   const allStepsDone = onboardingSteps.every((s) => s.done);
-  const showGuide = !guideHidden && !allStepsDone;
+  const showGuide = guideReady && !guideHidden && !allStepsDone;
+
+  const nothingYet = !summaryReady && !anomaliesReady && !insights;
+  const allFailed = failed.summary && failed.anomalies && failed.insights;
 
   return (
     <>
+      {nothingYet && allFailed && (
+        <div className="notice-bar error" role="alert">
+          <span>We couldn't reach the server. Check your connection — this usually clears up in a moment.</span>
+          <button className="btn btn-ghost" onClick={refresh}>Try again</button>
+        </div>
+      )}
+      {nothingYet && !allFailed && slow && (
+        <div className="notice-bar" role="status">
+          <span>Still connecting — the server is waking up. Your dashboard will fill in automatically.</span>
+        </div>
+      )}
       {showGuide && (
         <div style={{ marginBottom: 24 }}>
           <OnboardingGuide steps={onboardingSteps} allDone={allStepsDone} onDismiss={dismissGuide} />
@@ -364,10 +397,10 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
       )}
 
       <div style={{ display: "flex", gap: 16, marginBottom: 24, flexWrap: "wrap" }}>
-        <StatCard value={m.totalUploadedDocuments ?? 0} label="Total Documents" accent="var(--text-dark)" />
-        <StatCard value={m.successfullyReconciledCount ?? 0} label="Auto-Matched" accent="var(--primary-color)" />
-        <StatCard value={m.unreconciledAnomaliesDetected ?? 0} label="Needs Action" accent="var(--warning-color)" />
-        <StatCard value={m.gstMismatchFlagCount ?? 0} label="GST Gaps" accent="var(--danger-color)" />
+        <StatCard loading={!summaryReady} value={m.totalUploadedDocuments ?? 0} label="Total Documents" accent="var(--text-dark)" />
+        <StatCard loading={!summaryReady} value={m.successfullyReconciledCount ?? 0} label="Auto-Matched" accent="var(--primary-color)" />
+        <StatCard loading={!summaryReady} value={m.unreconciledAnomaliesDetected ?? 0} label="Needs Action" accent="var(--warning-color)" />
+        <StatCard loading={!summaryReady} value={m.gstMismatchFlagCount ?? 0} label="GST Gaps" accent="var(--danger-color)" />
       </div>
 
       <div className="grid-2" style={{ gap: 20, marginBottom: 24 }}>
@@ -375,37 +408,37 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
           <h4 style={{ fontSize: 14, marginBottom: 4, color: "var(--text-gray)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Document Status
           </h4>
-          <StatusDonut
+          {!summaryReady ? <Skeleton height={150} style={{ marginTop: 12 }} /> : <StatusDonut
             data={[
               { label: "Auto-Matched", value: m.successfullyReconciledCount ?? 0 },
               { label: "Needs Action", value: m.unreconciledAnomaliesDetected ?? 0 },
               { label: "GST Gaps", value: m.gstMismatchFlagCount ?? 0 },
             ]}
-          />
+          />}
         </div>
         <div className="card">
           <h4 style={{ fontSize: 14, marginBottom: 4, color: "var(--text-gray)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Vendors by ITC at Risk
           </h4>
-          <RiskBarChart
-            data={(insights?.vendorsRequiringFollowUp || [])
+          {!insights ? <Skeleton height={150} style={{ marginTop: 12 }} /> : <RiskBarChart
+            data={(insights.vendorsRequiringFollowUp || [])
               .slice(0, 6)
               .map((v) => ({ label: v.vendorName, value: v.totalTaxAtRisk }))}
             valueFormatter={(v) => `₹${(v / 1000).toFixed(0)}k`}
-          />
+          />}
         </div>
       </div>
 
       <div style={{ marginBottom: 24 }}>
-        <InsightsSection insights={insights} onExport={handleExport} onDetectMissing={handleDetectMissing} detecting={detecting} />
+        <InsightsSection insights={insights} failed={failed.insights} onRetry={refresh} onExport={handleExport} onDetectMissing={handleDetectMissing} detecting={detecting} />
       </div>
 
-      {summary?.plainEnglishInsight && (
+      {insightText && (
         <div className="card" style={{ background: "var(--primary-light)", borderLeft: "4px solid var(--primary-color)" }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "var(--primary-color)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
             AI Insight
           </div>
-          <p style={{ fontSize: 14, color: "var(--text-dark)", lineHeight: 1.6 }}>{summary.plainEnglishInsight}</p>
+          <p style={{ fontSize: 14, color: "var(--text-dark)", lineHeight: 1.6 }}>{insightText}</p>
         </div>
       )}
 
@@ -425,8 +458,20 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
             <button className="btn btn-primary" onClick={handleRunReconciliation}>Run Reconciliation</button>
           </div>
         </div>
-        {anomalies.length === 0 && <p style={{ color: "var(--text-gray)", fontSize: 13 }}>No open anomalies — everything is reconciled.</p>}
-        {anomalies.map((a) => (
+        {!anomaliesReady && !failed.anomalies && (
+          <div aria-busy="true">
+            <Skeleton height={14} style={{ marginBottom: 12 }} />
+            <Skeleton width="80%" height={14} />
+          </div>
+        )}
+        {failed.anomalies && !anomaliesReady && (
+          <div className="notice-bar error">
+            <span>Couldn't load open anomalies.</span>
+            <button className="btn btn-ghost" onClick={refresh}>Try again</button>
+          </div>
+        )}
+        {anomaliesReady && anomalies.length === 0 && <p style={{ color: "var(--text-gray)", fontSize: 13 }}>No open anomalies — everything is reconciled.</p>}
+        {(anomalies || []).map((a) => (
           <div className="list-row" key={a.anomalyId}>
             <div>
               <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>

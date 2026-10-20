@@ -35,6 +35,26 @@ export async function listAuditLogForEntity(sql: Sql, tenantId: string, entityTy
   `;
 }
 
+// Tenant-wide listing for the Audit Trail screen. Filters are optional and
+// always parameterized; the limit is clamped here as well as in the route.
+export async function listAuditLog(
+  sql: Sql, tenantId: string, opts: { entityType?: string; entityId?: string; limit?: number } = {},
+): Promise<AuditLogRow[]> {
+  const limit = Math.min(Math.max(Math.trunc(opts.limit ?? 100) || 100, 1), 200);
+  return sql<AuditLogRow[]>`
+    select
+      audit_log_id as "auditLogId", entity_type as "entityType", entity_id as "entityId", action,
+      field_name as "fieldName", old_value as "oldValue", new_value as "newValue", reason,
+      actor_email as "actorEmail", created_at as "createdAt"
+    from audit_log
+    where tenant_id = ${tenantId}
+      ${opts.entityType ? sql`and entity_type = ${opts.entityType}` : sql``}
+      ${opts.entityId ? sql`and entity_id = ${opts.entityId}` : sql``}
+    order by created_at desc
+    limit ${limit}
+  `;
+}
+
 // Retention purge (src/purge.ts) — audit_log rows carry no secrets (see
 // this file's own values: field_name/old_value/new_value are business
 // data, never passwords/tokens/OTPs), so this is a plain age-based

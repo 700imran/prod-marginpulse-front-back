@@ -4,6 +4,7 @@
  * working Profile dropdown (load/edit/save, change password, logout).
  */
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
+import { readCache, writeCache } from "./apiCache";
 import LoginPage from "./LoginPage";
 import { isLoggedIn, logout, getProfile } from "./api";
 import { GLOBAL_CSS, Icons, NAV_SECTIONS, Toast } from "./theme";
@@ -11,7 +12,7 @@ import { GLOBAL_CSS, Icons, NAV_SECTIONS, Toast } from "./theme";
 // Every screen is its own chunk, loaded only when navigated to — keeps
 // the initial bundle to just the app shell + whichever screen loads
 // first, instead of shipping all 14 screens' code up front.
-const DashboardView = lazy(() => import("./components/DashboardView"));
+import DashboardView from "./components/DashboardView"; // the landing view: bundled with the shell so there is no extra download before it can start loading data
 const DocumentsView = lazy(() => import("./components/DocumentsView"));
 const GSTSyncView = lazy(() => import("./components/GSTSyncView"));
 const ProfileView = lazy(() => import("./components/ProfileView"));
@@ -37,7 +38,7 @@ function initials(name) {
 function AppShell() {
   const [activeNav, setActiveNav] = useState("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [tenant, setTenant] = useState(null);
+  const [tenant, setTenant] = useState(() => readCache("profile")?.data ?? null); // last-known profile, shown instantly; replaced by the live one below
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [toast, setToast] = useState({ message: "", type: "" });
   const dropdownRef = useRef(null);
@@ -48,7 +49,33 @@ function AppShell() {
   }, []);
 
   useEffect(() => {
-    getProfile().then((data) => { if (data?.tenantId) setTenant(data); });
+    let cancelled = false;
+    getProfile()
+      .then((data) => {
+        if (cancelled || !data?.tenantId) return;
+        setTenant(data);
+        writeCache("profile", data);
+      })
+      .catch(() => { /* keep showing the cached profile; the dashboard has its own retry */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Once the first screen has painted, fetch the other pages' code in the
+  // background so clicking them is instant instead of a fresh download.
+  useEffect(() => {
+    const preload = () => {
+      import("./components/DocumentsView");
+      import("./components/GSTSyncView");
+      import("./components/TaxBankView");
+      import("./components/ProfileView");
+    };
+    const id = typeof window.requestIdleCallback === "function"
+      ? window.requestIdleCallback(preload, { timeout: 4000 })
+      : setTimeout(preload, 1500);
+    return () => {
+      if (typeof window.cancelIdleCallback === "function" && typeof id === "number") window.cancelIdleCallback(id);
+      else clearTimeout(id);
+    };
   }, []);
 
   // Close the profile dropdown on outside click.
@@ -74,7 +101,7 @@ function AppShell() {
       case "dashboard": return <DashboardView onToast={showToast} tenant={tenant} onNavigate={setActiveNav} />;
       case "documents": return <DocumentsView onToast={showToast} />;
       case "gst": return <GSTSyncView onToast={showToast} />;
-      case "profile": return <ProfileView onToast={showToast} onProfileUpdated={setTenant} />;
+      case "profile": return <ProfileView onToast={showToast} onProfileUpdated={(p) => { setTenant(p); if (p?.tenantId) writeCache("profile", p); }} />;
       case "taxbank": return <TaxBankView onToast={showToast} />;
       case "recon": return <ReconciliationRulesView onToast={showToast} />;
       case "api": return <IntegrationsView onToast={showToast} />;
@@ -183,7 +210,7 @@ function AppShell() {
           </div>
 
           <div className="fade-in" key={activeNav}>
-            <Suspense fallback={<div className="view-loading">Loading…</div>}>
+            <Suspense fallback={<div className="card" aria-busy="true"><div className="skeleton" style={{ height: 18, width: "30%", marginBottom: 16 }} /><div className="skeleton" style={{ height: 14, marginBottom: 10 }} /><div className="skeleton" style={{ height: 14, width: "80%" }} /></div>}>
               {renderContent()}
             </Suspense>
           </div>

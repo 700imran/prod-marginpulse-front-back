@@ -21,6 +21,7 @@ import { integrationRoutes } from "./routes/integrations";
 import { webhookRoutes } from "./routes/webhooks";
 import { billingRoutes } from "./routes/billing";
 import { assistantRoutes } from "./routes/assistant";
+import { auditLogRoutes } from "./routes/auditLog";
 import { handleQueueBatch } from "./queue/consumer";
 import { getDb } from "./db";
 import { listAllTenants } from "./repository/tenants";
@@ -53,6 +54,7 @@ app.route("/api/v1/admin", adminRoutes);
 app.route("/api/v1/integrations", integrationRoutes);
 app.route("/api/v1/billing", billingRoutes);
 app.route("/api/v1/assistant", assistantRoutes);
+app.route("/api/v1/audit-log", auditLogRoutes);
 app.route("/webhook", webhookRoutes); // unauthenticated — see routes/webhooks.ts
 
 app.notFound((c) => apiError(c, 404, "NOT_FOUND", "not found"));

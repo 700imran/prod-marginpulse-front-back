@@ -1,5 +1,5 @@
 /**
- * ROICalculatorView.jsx — POST /api/v1/roi-calculator (public endpoint,
+ * ROICalculatorView.jsx — POST /api/v1/roi (public endpoint,
  * no auth required — same call works if this form is ever lifted onto
  * the public marketing site). Every visitor should immediately see
  * "if I spend ₹X on MarginPulse, how much ITC/time do I recover".

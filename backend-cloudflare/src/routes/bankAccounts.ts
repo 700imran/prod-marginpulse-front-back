@@ -3,7 +3,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
-import { createBankAccount, listBankAccounts, getBankAccountById, setPrimaryBankAccount, deleteBankAccount, findByLast4AndIFSC } from "../repository/bankAccounts";
+import { createBankAccount, listBankAccounts, getBankAccountById, setPrimaryBankAccount, deleteBankAccount, findByLast4AndIFSC, updateBankAccountVerification } from "../repository/bankAccounts";
 import { encryptField, last4 } from "../security/fieldEncryption";
 import { reserveForOperation } from "../billing/guard";
 import { apiError } from "../http";
@@ -45,9 +45,8 @@ bankAccountRoutes.post("/", async (c) => {
   // The account record itself is stored either way — only the paid
   // verification call is gated by credits. If credits are short, the
   // account just stays PENDING (its default) until /reverify-style credit
-  // becomes available; there's no reverify endpoint for bank accounts yet,
-  // so for now this only degrades gracefully for a low/empty wallet rather
-  // than blocking account creation.
+  // becomes available — POST /:id/reverify below re-runs the check — so a
+  // low/empty wallet degrades gracefully rather than blocking account creation.
   const jobId = crypto.randomUUID();
   const reservation = await reserveForOperation(sql, tenant, "BANK_ACCOUNT_VERIFY", jobId);
   if (reservation.ok) {
@@ -59,6 +58,33 @@ bankAccountRoutes.post("/", async (c) => {
 
   const { accountNumberEncrypted: _drop, ...out } = item;
   return c.json({ ...out, credits_remaining: reservation.ok ? reservation.balanceAfter : undefined }, 201);
+});
+
+// POST /bank-accounts/:id/reverify — same shape as tax identifiers' reverify:
+// reserve credits for the paid check, mark PENDING, enqueue. Responds 202 with
+// the account row (minus the encrypted number) so the UI can update in place.
+bankAccountRoutes.post("/:id/reverify", async (c) => {
+  const tenant = c.get("tenant");
+  const sql = c.get("sql");
+  const id = c.req.param("id");
+  const existing = await getBankAccountById(sql, tenant.tenantId, id);
+  if (!existing) return apiError(c, 404, "NOT_FOUND", "bank account not found");
+
+  const jobId = crypto.randomUUID();
+  const reservation = await reserveForOperation(sql, tenant, "BANK_ACCOUNT_VERIFY", jobId);
+  if (!reservation.ok) {
+    return apiError(c, 402, "INSUFFICIENT_CREDITS", "Not enough usage credits for a verification call this billing period", { credits_remaining: reservation.balanceAfter });
+  }
+
+  await updateBankAccountVerification(sql, id, "PENDING", null, null);
+  await c.env.BANK_ACCOUNT_QUEUE.send({
+    task: "verify_bank_account_task", job_id: jobId, args: { tenant_id: tenant.tenantId, bank_account_id: id },
+    credit_reservation: { tenant_id: tenant.tenantId, operation: "BANK_ACCOUNT_VERIFY", amount: reservation.amount },
+  });
+
+  const updated = await getBankAccountById(sql, tenant.tenantId, id);
+  const { accountNumberEncrypted: _drop, ...out } = (updated ?? existing);
+  return c.json({ ...out, credits_remaining: reservation.balanceAfter }, 202);
 });
 
 bankAccountRoutes.post("/:id/set-primary", async (c) => {

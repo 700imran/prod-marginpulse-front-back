@@ -70,6 +70,11 @@ body { background-color: #e8eef2; color: var(--text-dark); }
 .nav-item:hover { background-color: rgba(24, 196, 150, 0.05); color: var(--text-dark); }
 .nav-item.active { background-color: var(--primary-light); color: var(--primary-color); }
 .nav-badge { margin-left: auto; font-size: 10px; padding: 3px 8px; border-radius: 12px; font-weight: 800; }
+.skeleton { background: linear-gradient(90deg, var(--border-color) 25%, var(--bg-color) 37%, var(--border-color) 63%); background-size: 400% 100%; animation: skeletonShimmer 1.3s ease infinite; border-radius: 8px; }
+@keyframes skeletonShimmer { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
+.notice-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 10px 14px; border-radius: 12px; font-size: 13px; margin-bottom: 16px; background: var(--primary-light); color: var(--text-dark); }
+.notice-bar.error { background: #fef2f2; color: var(--danger-color); }
 .view-loading { padding: 60px 0; text-align: center; color: var(--text-gray); font-size: 14px; }
 .badge-pro { background: rgba(24, 196, 150, 0.1); color: var(--pro-color); }
 .badge-growth { background: rgba(99, 102, 241, 0.1); color: var(--growth-color); }

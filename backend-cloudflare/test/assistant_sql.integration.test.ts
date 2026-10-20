@@ -7,10 +7,12 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import postgres from "postgres";
 import { searchDocumentsByInvoiceOrVendor, listByGSTStatus } from "../src/repository/documents";
+import { listAuditLog } from "../src/repository/auditLog";
 
 const url = process.env.PG_TEST_URL;
 const A = "11111111-1111-1111-1111-111111111111";
 const B = "22222222-2222-2222-2222-222222222222";
+const D1 = "d1d1d1d1-0000-0000-0000-000000000001", D2 = "d2d2d2d2-0000-0000-0000-000000000002", A1 = "a1a1a1a1-0000-0000-0000-000000000003", OTHER = "0e0e0e0e-0000-0000-0000-000000000004";
 
 describe.skipIf(!url)("assistant SQL (real Postgres)", () => {
   const sql = postgres(url ?? "postgres://x", { max: 1 }) as any;
@@ -59,5 +61,20 @@ describe.skipIf(!url)("assistant SQL (real Postgres)", () => {
   it("listByGSTStatus excludes trashed documents and other tenants", async () => {
     const r = await listByGSTStatus(sql, A, "NOT_FILED");
     expect(r.map((d: any) => d.vendorName)).toEqual(["Acme Traders"]);
+  });
+
+  it("listAuditLog: tenant-scoped, filterable, ordered newest first, limit clamped", async () => {
+    await sql.unsafe(`delete from audit_log`);
+    for (const [t, type, id] of [[A, "DOCUMENT", D1], [A, "ANOMALY", A1], [A, "DOCUMENT", D2], [B, "DOCUMENT", OTHER]]) {
+      await sql.unsafe(`insert into audit_log (tenant_id, entity_type, entity_id, action, actor_email) values ($1,$2,$3,'X','x@x.in')`, [t, type, id]);
+    }
+    const all = await listAuditLog(sql, A);
+    expect(all.map((r: any) => r.entityId).sort()).toEqual([A1, D1, D2].sort());   // never B's row
+    expect((await listAuditLog(sql, A, { entityType: "DOCUMENT" })).length).toBe(2);
+    expect((await listAuditLog(sql, A, { entityType: "DOCUMENT", entityId: D2 })).length).toBe(1);
+    expect((await listAuditLog(sql, A, { limit: 1 })).length).toBe(1);
+    expect((await listAuditLog(sql, A, { entityType: "x'; delete from audit_log;--" })).length).toBe(0);
+    expect((await listAuditLog(sql, A)).length).toBe(3);                          // table intact
+    expect((await listAuditLog(sql, A, { limit: 99999 })).length).toBe(3);        // clamped, not an error
   });
 });
