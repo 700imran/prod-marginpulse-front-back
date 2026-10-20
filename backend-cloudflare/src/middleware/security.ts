@@ -27,13 +27,32 @@ export const securityHeaders: MiddlewareHandler = async (c, next) => {
   c.header("Permissions-Policy", "geolocation=(), camera=(), microphone=(), payment=(), usb=()");
 };
 
+// Origins allowed to call this API from a browser: FRONTEND_ORIGIN (also used
+// for links in emails and OAuth redirects) plus any extras in ALLOWED_ORIGINS
+// (comma-separated — e.g. a second deployment of the same frontend). Matching
+// is exact: no wildcards, no suffix/prefix tricks, and a trailing slash or
+// different scheme/port is a different origin.
+export function allowedOrigins(env: { FRONTEND_ORIGIN?: string; ALLOWED_ORIGINS?: string }): string[] {
+  const list = [env.FRONTEND_ORIGIN ?? "", ...(env.ALLOWED_ORIGINS ?? "").split(",")]
+    .map((o) => o.trim())
+    .filter((o) => o.length > 0 && o !== "*" && o !== "null");
+  return [...new Set(list)];
+}
+
 export function corsMiddleware(): MiddlewareHandler<{ Bindings: Env }> {
   return async (c, next) => {
-    const origin = c.env.FRONTEND_ORIGIN;
-    c.header("Access-Control-Allow-Origin", origin);
-    c.header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
-    c.header("Access-Control-Allow-Headers", "Authorization,Content-Type");
-    c.header("Access-Control-Allow-Credentials", "true");
+    // The response differs by caller's Origin, so caches must key on it.
+    c.header("Vary", "Origin");
+    const requestOrigin = c.req.header("Origin");
+    // Reflect the caller's origin only if it is on the list. Anything else gets
+    // no Access-Control-* headers, which makes the browser refuse to expose the
+    // response to that page.
+    if (requestOrigin && allowedOrigins(c.env).includes(requestOrigin)) {
+      c.header("Access-Control-Allow-Origin", requestOrigin);
+      c.header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+      c.header("Access-Control-Allow-Headers", "Authorization,Content-Type");
+      c.header("Access-Control-Allow-Credentials", "true");
+    }
     if (c.req.method === "OPTIONS") {
       return c.body(null, 204);
     }

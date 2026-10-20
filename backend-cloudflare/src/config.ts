@@ -23,6 +23,7 @@ export interface Env {
   AI_MAX_PROMPT_TOKENS: string;        // config.go default: "8000"
   AI_MAX_COMPLETION_TOKENS: string;    // config.go default: "2000"
   FRONTEND_ORIGIN: string;
+  ALLOWED_ORIGINS?: string; // extra browser origins allowed by CORS, comma-separated (exact match)
   INGEST_EMAIL_ADDRESS: string;
   AI_INSIGHTS_DAILY_BUDGET_USD: string;
   ASSISTANT_MUTATIONS_ENABLED?: string; // "true" exposes the assistant's Phase 2 (confirm-first) tools; anything else keeps it read-only

@@ -143,6 +143,9 @@ LLM_MAX_TOKENS = "1024"
 AI_MAX_PROMPT_TOKENS = "8000"
 AI_MAX_COMPLETION_TOKENS = "2000"
 FRONTEND_ORIGIN = "https://marginpulse-app.vercel.app"
+# Extra origins allowed to call this API from a browser (comma-separated, exact
+# match, include https://, no trailing slash). The Cloudflare-hosted frontend:
+ALLOWED_ORIGINS = "https://prod-marginpulse-frontend.imrankhan210r.workers.dev"
 INGEST_EMAIL_ADDRESS = "noreply@marginpulse.example.com"
 WHATSAPP_API_VERSION = "v19.0"
 AI_INSIGHTS_DAILY_BUDGET_USD = "5.00"

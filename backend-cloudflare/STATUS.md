@@ -647,6 +647,30 @@ re-verify: credits, PENDING, queue); `POST /roi-calculator` → fixed path to
 `test/api_contract.test.ts` now fails if any frontend API call lacks a Worker
 route, and a new `ci.yml` runs backend + frontend checks on every PR.
 
+## CORS now allows more than one origin (new)
+
+`corsMiddleware` allowed exactly one origin (`FRONTEND_ORIGIN`, the Vercel app).
+A frontend served from any other origin — e.g. the Cloudflare-hosted
+`prod-marginpulse-frontend.imrankhan210r.workers.dev` — had every API response
+blocked by the browser, which looks like a dashboard that never loads. Now:
+`FRONTEND_ORIGIN` plus the comma-separated `ALLOWED_ORIGINS` var (set in
+`wrangler.toml` to the workers.dev frontend). Exact match only — wildcard,
+`null`, suffix/prefix lookalikes, wrong scheme/port/trailing slash are all
+refused (`test/cors.test.ts`, mutation-checked). `FRONTEND_ORIGIN` is still the
+Vercel URL and is what email invite links and Slack OAuth redirects use — change
+it if the workers.dev site is the primary one.
+
+**Which URL is which** (the repo and the live site disagree, so check):
+the Worker in `backend-cloudflare/wrangler.toml` is named
+`prod-marginpulse-front-back`; the address
+`prod-marginpulse-frontend.imrankhan210r.workers.dev` serves the React app's
+HTML, i.e. it is the *frontend*. The backend's default address would therefore
+be `https://prod-marginpulse-front-back.imrankhan210r.workers.dev` (derived from
+the Worker name and account subdomain; not verified from here). The frontend's
+build-time `REACT_APP_API_URL` must be that backend URL, with `https://` — if it
+is empty the app calls its own origin and gets HTML back, so nothing loads.
+`BACKEND_URL` for the keep-warm workflow is the same backend URL.
+
 ## Before you deploy
 
 1. Fix the GitHub repo's incomplete push if you still need the Go

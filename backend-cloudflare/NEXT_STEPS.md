@@ -312,6 +312,15 @@ a task list, not just prose:
       per distinct numbers; if you'd rather it never spend credits on page
       views at all, make `/dashboard-insight` opt-in from the UI.
 
+- [ ] New: **confirm the backend URL** (open `<url>/healthz` in a browser —
+      expect JSON with `"status":"ok"`), then use it for (a) the frontend's
+      `REACT_APP_API_URL` (with `https://`, rebuilt/redeployed) and (b) the
+      `BACKEND_URL` repo variable. `prod-marginpulse-frontend…workers.dev` serves
+      the React app, not the API. Deploy the CORS change before testing from the
+      workers.dev frontend.
+- [ ] New: decide whether `FRONTEND_ORIGIN` (invite emails, Slack redirects)
+      should move from the Vercel URL to the workers.dev one.
+
 ## Quick file map
 
 | Need to change... | Look in... |
