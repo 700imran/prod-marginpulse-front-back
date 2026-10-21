@@ -74,9 +74,19 @@ describe("CORS", () => {
     expect(allowedOrigins({ FRONTEND_ORIGIN: "https://a.com", ALLOWED_ORIGINS: "*, null, ,https://b.com" })).toEqual(["https://a.com", "https://b.com"]);
   });
 
-  it("the committed wrangler.toml allows the workers.dev frontend", async () => {
+  it("the committed wrangler.toml allows exactly the intended frontends", async () => {
     const { readFileSync } = await import("node:fs");
     const toml = readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8");
-    expect(toml).toMatch(/ALLOWED_ORIGINS\s*=\s*"[^"]*prod-marginpulse-frontend\.imrankhan210r\.workers\.dev/);
+    const get = (k: string) => new RegExp(`^${k}\\s*=\\s*"([^"]*)"`, "m").exec(toml)?.[1];
+    const env = { FRONTEND_ORIGIN: get("FRONTEND_ORIGIN"), ALLOWED_ORIGINS: get("ALLOWED_ORIGINS") } as any;
+    expect(env.FRONTEND_ORIGIN).toBe("https://app.marginpulse.in");
+    for (const o of ["https://app.marginpulse.in", "https://prod-marginpulse-frontend.imrankhan210r.workers.dev"]) {
+      const r = await req(o, "GET", env);
+      expect(r.headers.get("Access-Control-Allow-Origin")).toBe(o);
+    }
+    // lookalikes of the custom domain are refused
+    for (const o of ["https://app.marginpulse.in.evil.com", "https://evilapp.marginpulse.in", "https://marginpulse.in", "http://app.marginpulse.in"]) {
+      expect((await req(o, "GET", env)).headers.get("Access-Control-Allow-Origin")).toBeNull();
+    }
   });
 });

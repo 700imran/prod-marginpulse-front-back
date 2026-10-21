@@ -318,8 +318,10 @@ a task list, not just prose:
       `BACKEND_URL` repo variable. `prod-marginpulse-frontend…workers.dev` serves
       the React app, not the API. Deploy the CORS change before testing from the
       workers.dev frontend.
-- [ ] New: decide whether `FRONTEND_ORIGIN` (invite emails, Slack redirects)
-      should move from the Vercel URL to the workers.dev one.
+- [x] `FRONTEND_ORIGIN` moved to `https://app.marginpulse.in`.
+- [ ] New: in Supabase → Authentication → URL Configuration, set Site URL to
+      `https://app.marginpulse.in` and allow-list it plus the workers.dev URL as
+      redirect URLs (Google sign-in / email links).
 
 ## Quick file map
 

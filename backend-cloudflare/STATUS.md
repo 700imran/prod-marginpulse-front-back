@@ -663,6 +663,20 @@ before most API calls (a hidden extra round trip on every dashboard load).
 Vercel URL and is what email invite links and Slack OAuth redirects use — change
 it if the workers.dev site is the primary one.
 
+**Resolved:** the app's public address is `https://app.marginpulse.in` (custom
+domain on the `prod-marginpulse-frontend` Worker). `FRONTEND_ORIGIN` is now that,
+so invite emails and Slack redirects use it; `ALLOWED_ORIGINS` keeps the
+`workers.dev` address and the old Vercel one during the transition (remove the
+Vercel entry once nothing uses it). `test/cors.test.ts` reads the committed
+`wrangler.toml` and checks all of this.
+
+**Also needed outside this repo (not something code can do):** in the Supabase
+dashboard → Authentication → URL Configuration, make sure the Site URL is
+`https://app.marginpulse.in` and that it and the workers.dev address are in the
+Redirect URLs allow-list — otherwise Google sign-in and email links can bounce
+to the wrong place or be rejected. If Slack OAuth is used, its redirect URL
+lives on the backend, which is unchanged.
+
 **Which URL is which** (the repo and the live site disagree, so check):
 the Worker in `backend-cloudflare/wrangler.toml` is named
 `prod-marginpulse-front-back`; the address
