@@ -656,7 +656,10 @@ blocked by the browser, which looks like a dashboard that never loads. Now:
 `FRONTEND_ORIGIN` plus the comma-separated `ALLOWED_ORIGINS` var (set in
 `wrangler.toml` to the workers.dev frontend). Exact match only — wildcard,
 `null`, suffix/prefix lookalikes, wrong scheme/port/trailing slash are all
-refused (`test/cors.test.ts`, mutation-checked). `FRONTEND_ORIGIN` is still the
+refused (`test/cors.test.ts`, mutation-checked). Preflight answers now carry
+`Access-Control-Max-Age: 86400` so browsers stop re-sending an OPTIONS request
+before most API calls (a hidden extra round trip on every dashboard load).
+`FRONTEND_ORIGIN` is still the
 Vercel URL and is what email invite links and Slack OAuth redirects use — change
 it if the workers.dev site is the primary one.
 

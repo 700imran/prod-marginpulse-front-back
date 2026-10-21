@@ -44,6 +44,12 @@ describe("CORS", () => {
     expect(r.headers.get("Access-Control-Allow-Origin")).toBe("https://prod-marginpulse-frontend.imrankhan210r.workers.dev");
     expect(r.headers.get("Access-Control-Allow-Headers")).toContain("Authorization");
     expect(r.headers.get("Access-Control-Allow-Methods")).toContain("POST");
+    expect(r.headers.get("Access-Control-Max-Age")).toBe("86400"); // cached preflight = no extra round trip per request
+  });
+
+  it("only preflights advertise Max-Age; and a refused origin never does", async () => {
+    expect((await req("https://marginpulse-app.vercel.app", "GET")).headers.get("Access-Control-Max-Age")).toBeNull();
+    expect((await req("https://evil.example.com", "OPTIONS")).headers.get("Access-Control-Max-Age")).toBeNull();
   });
 
   it("preflight from a disallowed origin is answered but carries no allow headers", async () => {

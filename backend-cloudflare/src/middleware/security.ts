@@ -52,6 +52,11 @@ export function corsMiddleware(): MiddlewareHandler<{ Bindings: Env }> {
       c.header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
       c.header("Access-Control-Allow-Headers", "Authorization,Content-Type");
       c.header("Access-Control-Allow-Credentials", "true");
+      // Let the browser remember the preflight answer. Every API call carries an
+      // Authorization header, so without this the browser re-asks (an extra
+      // OPTIONS round trip) before most requests — it caches for only ~5s by
+      // default. Browsers clamp this (Chrome 2h, Firefox 24h); safe to ask for 24h.
+      if (c.req.method === "OPTIONS") c.header("Access-Control-Max-Age", "86400");
     }
     if (c.req.method === "OPTIONS") {
       return c.body(null, 204);
