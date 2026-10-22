@@ -20,9 +20,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "deploy = deploy + smoke test (auto-rollback on failure) | preview = upload a NON-live version and smoke-test it against the real database | crons = show the cron schedules"
+        description: "deploy = deploy + smoke test (auto-rollback on failure) | preview = upload a NON-live version and smoke-test it | crons = show the cron schedules | smoke-live = read-only smoke test of what is live right now"
         type: choice
-        options: [deploy, preview, crons]
+        options: [deploy, preview, crons, smoke-live]
         default: deploy
       fix_crons:
         description: "crons mode only: reset the schedule to just the daily sweep"
@@ -178,3 +178,39 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           FIX: ${{ inputs.fix_crons && '1' || '0' }}
+
+  # Read-only: smoke-test whatever is live right now. Changes nothing.
+  smoke-live:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'smoke-live'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend-cloudflare
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Work out the live URL
+        id: url
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          BACKEND_URL_VAR: ${{ vars.BACKEND_URL }}
+        run: |
+          url="${BACKEND_URL_VAR%/}"
+          if [ -z "$url" ]; then
+            name="$(grep -E '^name\s*=' wrangler.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+            acct="$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" https://api.cloudflare.com/client/v4/accounts | jq -r '.result[0].id // empty')"
+            sub="$(curl -sS -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$acct/workers/subdomain" | jq -r '.result.subdomain // empty')"
+            [ -n "$sub" ] && url="https://$name.$sub.workers.dev"
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "::notice title=live URL::${url:-<unknown>}"
+      - name: What does the edge say? (raw status + redirect target)
+        run: |
+          curl -sS -o /dev/null -m 20 -w 'GET /healthz -> HTTP %{http_code}  redirect=%{redirect_url}\n' "${{ steps.url.outputs.url }}/healthz" | tee /dev/stderr | sed 's/^/::notice title=raw healthz::/'
+      - name: Smoke test (live)
+        env:
+          BACKEND_URL: ${{ steps.url.outputs.url }}
+          CORS_ORIGINS: ${{ vars.FRONTEND_URLS || 'https://app.marginpulse.in,https://prod-marginpulse-frontend.imrankhan210r.workers.dev' }}
+        run: node scripts/smoke.mjs

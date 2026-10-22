@@ -53,7 +53,7 @@ export async function runSmoke(opts) {
   // ── Backend: health & configuration ────────────────────────────────────────
   await check("health: /healthz is 200, database + schema ok", async () => {
     const { res, json, text, ms } = await call("GET", `${base}/healthz`);
-    expect(res.status === 200, `HTTP ${res.status} ${text.slice(0, 160)}`);
+    expect(res.status === 200, `HTTP ${res.status}${res.headers.get("location") ? ` → redirects to ${res.headers.get("location")}` : ""} ${text.replace(/\s+/g, " ").slice(0, 140)}`);
     expect(json?.status === "ok", `status=${json?.status}`);
     expect(json?.checks?.database?.ok === true, "database check failed");
     expect(json?.checks?.schema?.ok === true, "database schema does not match this build — run db/schema.sql on Supabase");
