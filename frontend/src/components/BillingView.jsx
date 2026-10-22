@@ -9,6 +9,11 @@ import { useState } from "react";
 import { tokenManager } from "../security/tokenManager";
 
 const API_BASE = "https://api.marginpulse.in";
+const PLAN_OPTIONS = [
+  { id: "starter", label: "Starter", price: 499, description: "For solo practitioners" },
+  { id: "pro", label: "Pro", price: 1499, description: "Best for growing teams" },
+  { id: "enterprise", label: "Enterprise", price: 4999, description: "Advanced controls & scale" },
+];
 
 function getAccessToken() {
   return (
@@ -122,13 +127,14 @@ export async function startPayment(amount) {
 
 export default function BillingView({ tenant }) {
   const [isPaying, setIsPaying] = useState(false);
+  const [selectedPlanId, setSelectedPlanId] = useState("pro");
   const planLabel = tenant?.planTier === "FREE" ? "Auditor Free" : tenant?.planTier || "Auditor Free";
-  const amount = 1499;
+  const selectedPlan = PLAN_OPTIONS.find((plan) => plan.id === selectedPlanId) || PLAN_OPTIONS[1];
 
   const handleUpgrade = async () => {
     setIsPaying(true);
     try {
-      await startPayment(amount);
+      await startPayment(selectedPlan.price);
     } finally {
       setIsPaying(false);
     }
@@ -139,6 +145,34 @@ export default function BillingView({ tenant }) {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <h3 style={{ fontSize: 18 }}>Current Plan: {planLabel}</h3>
         <span className="nav-badge badge-pro" style={{ padding: "4px 8px" }}>Razorpay ready</span>
+      </div>
+
+      <h4 style={{ marginBottom: 16, fontSize: 16 }}>Choose a plan</h4>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, marginBottom: 24 }}>
+        {PLAN_OPTIONS.map((plan) => {
+          const active = plan.id === selectedPlanId;
+          return (
+            <button
+              key={plan.id}
+              type="button"
+              onClick={() => setSelectedPlanId(plan.id)}
+              style={{
+                textAlign: "left",
+                padding: 16,
+                borderRadius: 12,
+                border: active ? "2px solid var(--primary-color)" : "1px solid rgba(255,255,255,0.1)",
+                background: active ? "rgba(24, 196, 150, 0.08)" : "rgba(255,255,255,0.02)",
+                color: "var(--text-primary)",
+                cursor: "pointer",
+                transition: "all 0.2s ease",
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: 8 }}>{plan.label}</div>
+              <div style={{ fontSize: 24, fontWeight: 800, marginBottom: 6 }}>₹{plan.price}</div>
+              <div style={{ fontSize: 12, color: "var(--text-gray)" }}>{plan.description}</div>
+            </button>
+          );
+        })}
       </div>
 
       <h4 style={{ marginBottom: 16, fontSize: 16 }}>Pro Features Include:</h4>
@@ -155,7 +189,7 @@ export default function BillingView({ tenant }) {
         disabled={isPaying}
         style={{ opacity: isPaying ? 0.7 : 1 }}
       >
-        {isPaying ? "Processing payment..." : `Upgrade to Pro — ₹${amount}`}
+        {isPaying ? "Processing payment..." : `Upgrade to ${selectedPlan.label} — ₹${selectedPlan.price}`}
       </button>
 
       <p style={{ fontSize: 12, color: "var(--text-gray)", marginTop: 14 }}>
