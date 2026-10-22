@@ -182,7 +182,25 @@ export function formatReport(results) {
   return results.map((r) => `${r.ok ? "PASS" : r.warn ? "WARN" : "FAIL"}  ${r.name}${r.detail ? `  — ${r.detail}` : ""}`).join("\n");
 }
 
-// CLI
+// In GitHub Actions, also surface results as annotations (visible on the run page
+// and via the API) and a step summary table — raw logs aren't always reachable.
+function annotate(level, title, msg) {
+  const esc = (t) => String(t).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+  console.log(`::${level} title=${esc(title)}::${esc(msg)}`);
+}
+function reportToGitHub(results) {
+  for (const r of results) {
+    if (!r.ok) annotate(r.warn ? "warning" : "error", `smoke: ${r.name}`, r.detail || "failed");
+  }
+  const failed = results.filter((r) => !r.ok && !r.warn).length;
+  annotate("notice", "smoke: summary", `${results.length - failed - results.filter((r) => !r.ok && r.warn).length} passed, ${failed} failed`);
+  const file = process.env.GITHUB_STEP_SUMMARY;
+  if (file) {
+    const rows = results.map((r) => `| ${r.ok ? "PASS" : r.warn ? "WARN" : "FAIL"} | ${r.name.replace(/\|/g, "\\|")} | ${String(r.detail).replace(/\|/g, "\\|").replace(/\n/g, " ")} |`);
+    import("node:fs").then((fs) => fs.appendFileSync(file, `### Production smoke test\n\n| | check | detail |\n|---|---|---|\n${rows.join("\n")}\n`));
+  }
+}
+
 const list = (v) => (v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
 if (import.meta.url === `file://${process.argv[1]}`) {
   const backendUrl = process.env.BACKEND_URL;
@@ -196,6 +214,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     expectMutations: process.env.EXPECT_MUTATIONS === "on" ? "on" : "off",
   });
   console.log(formatReport(results));
+  if (process.env.GITHUB_ACTIONS === "true") reportToGitHub(results);
   const f = results.filter((r) => !r.ok && !r.warn).length, w = results.filter((r) => !r.ok && r.warn).length;
   console.log(`\n${results.length - f - w} passed, ${f} failed, ${w} warnings`);
   process.exit(ok ? 0 : 1);

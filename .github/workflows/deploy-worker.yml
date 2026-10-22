@@ -17,10 +17,22 @@ on:
     branches: [main]
     paths:
       - "backend-cloudflare/**"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "deploy = deploy + smoke test (auto-rollback on failure) | preview = upload a NON-live version and smoke-test it against the real database | crons = show the cron schedules"
+        type: choice
+        options: [deploy, preview, crons]
+        default: deploy
+      fix_crons:
+        description: "crons mode only: reset the schedule to just the daily sweep"
+        type: boolean
+        default: false
 
 jobs:
   deploy:
+    # A push to main always deploys; a manual run deploys only in "deploy" mode.
+    if: github.event_name == 'push' || inputs.mode == 'deploy'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -91,6 +103,15 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
 
+      # A rollback restores the previous *code*, but cron schedules belong to the
+      # deployment, not the version — put them back too (see scripts/crons.sh).
+      - name: Reset cron schedules after rollback
+        if: always() && steps.smoke.outcome == 'failure'
+        run: bash scripts/crons.sh
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          FIX: "1"
+
       - name: Fail loudly if the URL could not be determined
         if: steps.url.outputs.url == ''
         run: |
@@ -107,3 +128,53 @@ jobs:
           BACKEND_URL: ${{ steps.url.outputs.url }}
           FRONTEND_URLS: ${{ vars.FRONTEND_URLS || 'https://app.marginpulse.in,https://prod-marginpulse-frontend.imrankhan210r.workers.dev' }}
         run: node scripts/smoke.mjs
+
+  # Test the new code against the real database and secrets WITHOUT making it
+  # live: upload a Worker version (not deployed), then smoke-test its preview URL.
+  preview:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'preview'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend-cloudflare
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+
+      - name: Upload a version (NOT deployed)
+        run: |
+          set -o pipefail
+          npx wrangler versions upload 2>&1 | tee upload.log
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Smoke test the preview
+        env:
+          CORS_ORIGINS: ${{ vars.FRONTEND_URLS || 'https://app.marginpulse.in,https://prod-marginpulse-frontend.imrankhan210r.workers.dev' }}
+        run: |
+          url="$(grep -iE 'preview url' upload.log | grep -oE 'https://[^ ]+' | head -1 | tr -d '\r' || true)"
+          if [ -z "$url" ]; then
+            echo "::error title=preview::wrangler printed no Version Preview URL (preview URLs may be disabled for this Worker). Nothing was tested; nothing was deployed."
+            exit 1
+          fi
+          echo "Smoke-testing preview: $url"
+          BACKEND_URL="$url" node scripts/smoke.mjs
+
+  crons:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'crons'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend-cloudflare
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show (and optionally reset) cron schedules
+        run: bash scripts/crons.sh
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          FIX: ${{ inputs.fix_crons && '1' || '0' }}
