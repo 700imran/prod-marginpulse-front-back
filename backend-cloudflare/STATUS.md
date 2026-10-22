@@ -688,6 +688,37 @@ build-time `REACT_APP_API_URL` must be that backend URL, with `https://` — if 
 is empty the app calls its own origin and gets HTML back, so nothing loads.
 `BACKEND_URL` for the keep-warm workflow is the same backend URL.
 
+## Deploy safety net: schema check, smoke test, auto-rollback (new)
+
+Deploying this branch to production ships the whole hardening pass for the first
+time, which needs tables/columns production may not have yet. Instead of finding
+out through scattered 500s:
+- `GET /healthz` now also verifies the database schema matches this build
+  (`src/schemaCheck.ts`: required tables/columns in one query; names of anything
+  missing go to the logs, the response only says `schema: {ok}`). A mismatch is
+  a 503. Also reports `rls` (row-level security on) as a non-critical flag.
+  Tested against real Postgres, including a dropped table/column being detected.
+- `backend-cloudflare/scripts/smoke.mjs` — a production smoke test run from
+  outside: health + schema, security headers, CORS (allowed origins accepted, an
+  unlisted one refused), auth enforced on protected routes (401, standard error
+  envelope), clean 404, public ROI route never 5xx, and — if given
+  `SMOKE_TOKEN` — authenticated dashboard/audit-log checks and that assistant
+  actions are OFF. It can also check each frontend loads and was built with this
+  backend's address. `test/smoke.test.ts` runs it against the real app (must
+  pass) and against 8 deliberately broken backends (must fail).
+- `deploy-worker.yml` now: typecheck → tests → deploy → smoke test the live URL
+  (3 attempts) → **`wrangler rollback` automatically if it still fails**.
+  Frontend checks run afterwards as information only. Run it by hand:
+  `BACKEND_URL=https://… FRONTEND_URLS=https://app.marginpulse.in node backend-cloudflare/scripts/smoke.mjs`.
+- Optional repo config: variable `FRONTEND_URLS` (comma-separated; defaults to
+  app.marginpulse.in + the workers.dev frontend), secret `SMOKE_TOKEN` (a user's
+  Supabase access token — these expire in about an hour, so it's only useful for
+  manual runs).
+
+Limits: the smoke test can't see Supabase RLS correctness or business logic; a
+rollback restores the previous *Worker version* but cannot undo database
+changes (schema.sql is additive/idempotent, so none are needed).
+
 ## Before you deploy
 
 1. Fix the GitHub repo's incomplete push if you still need the Go

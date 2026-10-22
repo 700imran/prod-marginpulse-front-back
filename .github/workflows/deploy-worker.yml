@@ -42,6 +42,68 @@ jobs:
         run: npm test
 
       - name: Deploy to Cloudflare Workers
-        run: npx wrangler deploy
+        id: deploy
+        run: |
+          set -o pipefail
+          npx wrangler deploy 2>&1 | tee deploy.log
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      # Work out the live address: the BACKEND_URL repo variable if set, otherwise
+      # the *.workers.dev URL wrangler just printed.
+      - name: Find the deployed URL
+        id: url
+        env:
+          BACKEND_URL_VAR: ${{ vars.BACKEND_URL }}
+        run: |
+          url="${BACKEND_URL_VAR%/}"
+          if [ -z "$url" ]; then
+            url="$(grep -oE 'https://[A-Za-z0-9.-]+\.workers\.dev' deploy.log | head -1 || true)"
+          fi
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "Smoke-testing: ${url:-<none found>}"
+
+      # Gate: the backend itself must be healthy, in sync with its database,
+      # enforce auth, and allow the frontends' origins. Retries absorb the few
+      # seconds a new version takes to propagate. If it still fails, put the
+      # previous version back automatically.
+      - name: Smoke test the live backend
+        id: smoke
+        if: steps.url.outputs.url != ''
+        env:
+          BACKEND_URL: ${{ steps.url.outputs.url }}
+          CORS_ORIGINS: ${{ vars.FRONTEND_URLS || 'https://app.marginpulse.in,https://prod-marginpulse-frontend.imrankhan210r.workers.dev' }}
+          SMOKE_TOKEN: ${{ secrets.SMOKE_TOKEN }}
+        run: |
+          sleep 10
+          for attempt in 1 2 3; do
+            echo "::group::smoke attempt $attempt"
+            if node scripts/smoke.mjs; then echo "::endgroup::"; exit 0; fi
+            echo "::endgroup::"
+            [ "$attempt" -lt 3 ] && sleep 15
+          done
+          exit 1
+
+      - name: Roll back to the previous version (smoke test failed)
+        if: failure() && steps.smoke.outcome == 'failure'
+        run: |
+          npx wrangler rollback -y -m "auto-rollback - post-deploy smoke test failed (run ${{ github.run_id }})"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+
+      - name: Fail loudly if the URL could not be determined
+        if: steps.url.outputs.url == ''
+        run: |
+          echo "::error::Could not determine the deployed URL — set the BACKEND_URL repo variable. The deploy happened but was NOT smoke-tested."
+          exit 1
+
+      # Informational: are the frontends up and built for this backend? Does not
+      # roll anything back (a frontend that hasn't been redeployed yet is not a
+      # backend fault).
+      - name: Check the frontends (informational)
+        if: always() && steps.url.outputs.url != ''
+        continue-on-error: true
+        env:
+          BACKEND_URL: ${{ steps.url.outputs.url }}
+          FRONTEND_URLS: ${{ vars.FRONTEND_URLS || 'https://app.marginpulse.in,https://prod-marginpulse-frontend.imrankhan210r.workers.dev' }}
+        run: node scripts/smoke.mjs

@@ -323,6 +323,13 @@ a task list, not just prose:
       `https://app.marginpulse.in` and allow-list it plus the workers.dev URL as
       redirect URLs (Google sign-in / email links).
 
+- [ ] New: for the assistant to answer, the Worker needs the `ANTHROPIC_API_KEY`
+      secret (`wrangler secret put ANTHROPIC_API_KEY`); without it the assistant
+      replies 501 and charges nothing. `ASSISTANT_MUTATIONS_ENABLED` stays
+      `"false"` until the live red-team has passed (see WORKFLOW.md).
+- [ ] New: after any deploy, glance at the "Smoke test the live backend" step in
+      the Actions run — PASS/FAIL/WARN per check is printed there.
+
 ## Quick file map
 
 | Need to change... | Look in... |
