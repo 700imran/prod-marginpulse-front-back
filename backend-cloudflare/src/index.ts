@@ -17,6 +17,7 @@ import { commsRoutes } from "./routes/comms";
 import { roiRoutes } from "./routes/roi";
 import { adminRoutes } from "./routes/admin";
 import { integrationRoutes } from "./routes/integrations";
+import { billingRoutes } from "./routes/billing";
 import { webhookRoutes } from "./routes/webhooks";
 import { handleQueueBatch } from "./queue/consumer";
 import { getDb } from "./db";
@@ -42,7 +43,59 @@ app.route("/api/v1/comms", commsRoutes);
 app.route("/api/v1/roi", roiRoutes); // unauthenticated by design — see routes/roi.ts
 app.route("/api/v1/admin", adminRoutes);
 app.route("/api/v1/integrations", integrationRoutes);
+app.route("/api/v1/billing", billingRoutes);
 app.route("/webhook", webhookRoutes); // unauthenticated — see routes/webhooks.ts
+
+// ─── Razorpay: Webhook Handler ────────────────────────────
+app.post("/api/razorpay/webhook", async (c) => {
+  const body = await c.req.text();
+  const signature = c.req.header("X-Razorpay-Signature");
+
+  if (!c.env.RAZORPAY_WEBHOOK_SECRET) {
+    console.error("RAZORPAY_WEBHOOK_SECRET not configured");
+    return c.json({ error: "Webhook secret not configured" }, 500);
+  }
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(c.env.RAZORPAY_WEBHOOK_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
+  const expected = btoa(String.fromCharCode(...new Uint8Array(sig)));
+
+  if (expected !== signature) {
+    return c.json({ error: "Invalid signature" }, 400);
+  }
+
+  let event;
+  try {
+    event = JSON.parse(body);
+  } catch {
+    return c.json({ error: "Invalid JSON" }, 400);
+  }
+
+  switch (event.event) {
+    case "payment.captured":
+      console.log("razorpay:payment_captured", event.payload?.payment?.entity?.id);
+      break;
+    case "payment.failed":
+      console.log("razorpay:payment_failed", event.payload?.payment?.entity?.id);
+      break;
+    case "order.paid":
+      console.log("razorpay:order_paid", event.payload?.order?.entity?.id);
+      break;
+    case "refund.processed":
+      console.log("razorpay:refund_processed", event.payload?.refund?.entity?.id);
+      break;
+    default:
+      console.log("razorpay:event", event.event);
+  }
+
+  return c.json({ status: "ok" }, 200);
+});
 
 app.notFound((c) => c.json({ error: "not found" }, 404));
 app.onError((err, c) => {
