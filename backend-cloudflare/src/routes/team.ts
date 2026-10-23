@@ -3,6 +3,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
+import { requireFeature } from "../billing/featureGate";
 import { inviteTeamMember, listTeamMembers, getByInviteToken, revokeTeamMember, countActiveOrPending, findActiveOrPendingForEmail, acceptInvite } from "../repository/teamMembers";
 import { generateToken } from "../security/random";
 import { setPrivilegedContext } from "../security/tenantContext";
@@ -12,6 +13,7 @@ import { apiError } from "../http";
 export const teamRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
 teamRoutes.use("*", requireAuth);
+teamRoutes.use("*", requireFeature("team"));
 
 const MAX_TEAM_MEMBERS = 10; // matches the Go original's plan-tier-agnostic cap
 

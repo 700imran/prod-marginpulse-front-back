@@ -19,7 +19,13 @@ import { getOcrLines } from './ocr';
 import { normalizeErrorBody } from './apiErrors';
 import { setUserIdGetter, userIdFromToken } from './apiCache';
 
-const BASE = process.env.REACT_APP_API_URL || '';
+// Where the backend lives. REACT_APP_API_URL wins; but if it was missing when this
+// bundle was built (an easy deploy mistake, and the app then calls ITS OWN address,
+// gets HTML back, and every screen spins forever) a production build falls back to
+// the real backend rather than failing silently. Local dev (no env var) still uses
+// '' so a dev-server proxy works.
+export const DEFAULT_API_BASE = 'https://api.marginpulse.in';
+const BASE = process.env.REACT_APP_API_URL || (process.env.NODE_ENV === 'production' ? DEFAULT_API_BASE : '');
 
 function getToken() {
   return tokenManager.getAccessToken();
@@ -90,7 +96,13 @@ async function request(method, path, body) {
     // Retry original request with the refreshed token
     return request(method, path, body);
   }
-  return normalizeErrorBody(await res.json());
+  const parsed = normalizeErrorBody(await res.json());
+  // A feature the plan doesn't include: tell the app shell so it can show the upgrade
+  // screen, whichever view happened to make the call.
+  if (res.status === 402 && parsed?.error_code === 'PLAN_REQUIRED' && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('mp:plan-required', { detail: parsed.error_details || {} }));
+  }
+  return parsed;
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -468,4 +480,18 @@ export function assistantMessage(message, conversationHistory) {
 
 export function assistantConfirm(confirmationToken) {
   return requestWithStatus('POST', '/api/v1/assistant/confirm', { confirmation_token: confirmationToken });
+}
+
+// ── Plans & payments ─────────────────────────────────────────────────────────
+export function getBillingPlans() {
+  return request('GET', '/api/v1/billing/plans');
+}
+
+// The browser only NAMES a plan; the server decides the price.
+export function createCheckout(plan) {
+  return requestWithStatus('POST', '/api/v1/billing/checkout', { plan });
+}
+
+export function verifyPayment({ razorpay_order_id, razorpay_payment_id, razorpay_signature }) {
+  return requestWithStatus('POST', '/api/v1/billing/verify', { razorpay_order_id, razorpay_payment_id, razorpay_signature });
 }

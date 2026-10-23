@@ -34,6 +34,11 @@ create table if not exists public.tenants (
 );
 create index if not exists idx_tenants_owner_email on public.tenants (owner_email);
 
+-- When a paid plan (bought through payment_orders below) stops applying. NULL =
+-- no expiry (FREE, or a plan set by hand, e.g. ENTERPRISE). The app treats an
+-- expired plan as FREE at read time, so no scheduled job has to downgrade anyone.
+alter table public.tenants add column if not exists plan_expires_at timestamptz;
+
 -- ============================================================================
 -- documents
 -- ============================================================================
@@ -102,9 +107,17 @@ create table if not exists public.bank_transactions (
 );
 create index if not exists idx_banktx_tenant_status_date on public.bank_transactions (tenant_id, reconciliation_status, transaction_date desc);
 
-alter table public.documents
-  add constraint fk_documents_matched_tx foreign key (matched_bank_transaction_id)
-  references public.bank_transactions(transaction_id) deferrable initially deferred;
+-- ADD CONSTRAINT has no IF NOT EXISTS, so guard it: this file must be safe to
+-- re-run on a database that already has it (that is how an existing deployment
+-- is upgraded — see STATUS.md "Applying db/schema.sql to an existing database").
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'fk_documents_matched_tx' and conrelid = 'public.documents'::regclass) then
+    alter table public.documents
+      add constraint fk_documents_matched_tx foreign key (matched_bank_transaction_id)
+      references public.bank_transactions(transaction_id) deferrable initially deferred;
+  end if;
+end $$;
 
 -- ============================================================================
 -- tax_identifiers — UNIQUE constraint replaces the Dynamo "guard item" trick
@@ -365,6 +378,28 @@ create table if not exists public.usage_events (
 );
 create index if not exists idx_usage_events_tenant_created on public.usage_events (tenant_id, created_at desc);
 
+-- ============================================================================
+-- payment_orders — one row per checkout we started with the payment provider
+-- (Razorpay). The amount is fixed server-side when the row is created; a payment
+-- only activates a plan if the provider reports exactly that amount for exactly
+-- this order. status moves CREATED -> PAID once, guarded by a row lock, so a
+-- webhook and a browser confirmation arriving together cannot double-apply.
+-- ============================================================================
+create table if not exists public.payment_orders (
+  order_id            uuid primary key default gen_random_uuid(),
+  tenant_id           uuid not null references public.tenants(tenant_id) on delete cascade,
+  plan                text not null check (plan in ('STARTER','GROWTH','ENTERPRISE')),
+  months              integer not null default 1 check (months between 1 and 12),
+  amount_paise        bigint not null check (amount_paise > 0),
+  currency            text not null default 'INR',
+  status              text not null default 'CREATED' check (status in ('CREATED','PAID','FAILED')),
+  razorpay_order_id   text not null unique,
+  razorpay_payment_id text unique,
+  created_at          timestamptz not null default now(),
+  paid_at             timestamptz
+);
+create index if not exists idx_payment_orders_tenant on public.payment_orders (tenant_id, created_at desc);
+
 -- Backfill: one wallet row per tenant that already existed when this
 -- migration (re-)ran, so reserveCredits() never has to special-case a
 -- missing wallet for a pre-existing tenant. New tenants get a wallet
@@ -461,7 +496,7 @@ begin
     'tenants', 'documents', 'bank_transactions', 'tax_identifiers', 'bank_accounts',
     'team_members', 'anomalies', 'audit_log', 'reconciliation_settings',
     'notification_settings', 'integration_settings', 'integrations',
-    'credit_wallets', 'credit_ledger', 'usage_events'
+    'credit_wallets', 'credit_ledger', 'usage_events', 'payment_orders'
   ]
   loop
     execute format('alter table public.%I enable row level security', t);

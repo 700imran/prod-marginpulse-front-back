@@ -3,6 +3,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
+import { requireFeature } from "../billing/featureGate";
 import {
   getReconciliationSettings, updateReconciliationSettings,
   getNotificationSettings, updateNotificationSettings,
@@ -12,6 +13,10 @@ import {
 export const settingsRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
 settingsRoutes.use("*", requireAuth);
+// Each settings screen is its own plan feature.
+settingsRoutes.use("/reconciliation", requireFeature("recon_rules"));
+settingsRoutes.use("/notifications", requireFeature("notifications"));
+settingsRoutes.use("/integrations", requireFeature("integrations"));
 
 settingsRoutes.get("/reconciliation", async (c) => c.json(await getReconciliationSettings(c.get("sql"), c.get("tenant").tenantId)));
 settingsRoutes.patch("/reconciliation", async (c) => {

@@ -22,6 +22,7 @@ export type ErrorCode =
   | "NOT_FOUND"
   | "CONFLICT"
   | "INSUFFICIENT_CREDITS"
+  | "PLAN_REQUIRED"
   | "RATE_LIMITED"
   | "NOT_IMPLEMENTED"
   | "UPSTREAM_ERROR"

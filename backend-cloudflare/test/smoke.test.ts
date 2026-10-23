@@ -86,6 +86,7 @@ function fakeBackend(over: Partial<Record<string, (u: URL, init: any) => Respons
     if (init.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...cors, ...sec } });
     if (u.pathname === "/healthz") return Response.json({ status: "ok", checks: { database: { ok: true }, schema: { ok: true }, rls: { ok: true }, redis: { ok: true } } }, { headers: sec });
     if (u.pathname === "/api/v1/roi") return Response.json({ ok: 1 }, { status: 400 });
+    if (u.pathname === "/webhook/razorpay") return Response.json({ error: { code: "UNAUTHENTICATED" } }, { status: 401 });
     if (u.pathname.startsWith("/api/v1/definitely")) return Response.json({ error: { code: "NOT_FOUND" } }, { status: 404 });
     return Response.json({ error: { code: "UNAUTHORIZED", message: "x" } }, { status: 401, headers: sec });
   };
@@ -120,6 +121,18 @@ describe("fails on broken backends", () => {
   it("a health endpoint that leaks connection details", async () => {
     const f = fakeBackend({ "/healthz": () => Response.json({ status: "ok", checks: { database: { ok: true, error: "connect ECONNREFUSED 10.0.0.5" }, schema: { ok: true } } }) });
     expect(failedNames(await run(f))[0]).toMatch(/health/);
+  });
+  it("a payment webhook that accepts unsigned requests", async () => {
+    const r = await run(fakeBackend({ "POST /webhook/razorpay": () => Response.json({ ok: true }) }));
+    expect(failedNames(r).some((n: string) => n.includes("Razorpay webhook rejects an unsigned"))).toBe(true);
+  });
+  it("billing endpoints that are open without a token", async () => {
+    const r = await run(fakeBackend({ "GET /api/v1/billing/plans": () => Response.json({ plans: [] }) }));
+    expect(failedNames(r)).toContain("auth: GET /api/v1/billing/plans requires a token (401)");
+  });
+  it("a frontend that reaches the backend through its custom domain is fine", async () => {
+    const r = await runSmoke({ backendUrl: BACKEND, frontendUrls: [APP], fetchImpl: withFrontends(fakeBackend(), 'const API="https://api.marginpulse.in";') });
+    expect(failedNames(r)).toEqual([]);
   });
   it("a 500 on the public ROI route", async () => {
     expect(failedNames(await run(fakeBackend({ "/api/v1/roi": () => new Response("boom", { status: 500 }) })))).toContain("public: POST /api/v1/roi never 5xx on empty input");

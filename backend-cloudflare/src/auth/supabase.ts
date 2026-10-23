@@ -81,6 +81,7 @@ export interface TenantContext {
   ownerEmail: string;
   businessName: string;
   planTier: string;
+  planExpiresAt?: string | null; // when a purchased plan lapses (it then reads as FREE); null = no expiry
   isActive: boolean;
   isPlatformAdmin: boolean;
   gstinNumber: string | null;
@@ -113,7 +114,8 @@ export async function loadOrCreateTenant(
       tenant_id as "tenantId",
       owner_email as "ownerEmail",
       business_name as "businessName",
-      plan_tier as "planTier",
+      case when plan_expires_at is not null and plan_expires_at <= now() then 'FREE' else plan_tier end as "planTier",
+      plan_expires_at as "planExpiresAt",
       is_active as "isActive",
       is_platform_admin as "isPlatformAdmin",
       gstin_number as "gstinNumber",

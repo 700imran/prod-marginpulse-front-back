@@ -5,6 +5,9 @@
  */
 import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
 import { readCache, writeCache } from "./apiCache";
+import { usePlans } from "./components/usePlans";
+import LockedFeature from "./components/LockedFeature";
+import { NAV_FEATURE, isFeatureLocked, navBadge } from "./planLogic";
 import LoginPage from "./LoginPage";
 import { isLoggedIn, logout, getProfile } from "./api";
 import { GLOBAL_CSS, Icons, NAV_SECTIONS, Toast } from "./theme";
@@ -40,6 +43,7 @@ function AppShell() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [tenant, setTenant] = useState(() => readCache("profile")?.data ?? null); // last-known profile, shown instantly; replaced by the live one below
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const { plans, failed: plansFailed, refresh: refreshPlans } = usePlans();
   const [toast, setToast] = useState({ message: "", type: "" });
   const dropdownRef = useRef(null);
 
@@ -48,17 +52,29 @@ function AppShell() {
     setTimeout(() => setToast({ message: "", type: "" }), 3500);
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    getProfile()
-      .then((data) => {
-        if (cancelled || !data?.tenantId) return;
-        setTenant(data);
-        writeCache("profile", data);
-      })
-      .catch(() => { /* keep showing the cached profile; the dashboard has its own retry */ });
-    return () => { cancelled = true; };
+  // Load (and later re-load, e.g. after a plan purchase) the profile. Keeps showing the
+  // cached one if the request fails; the dashboard has its own retry.
+  const refreshProfile = useCallback(async () => {
+    try {
+      const data = await getProfile();
+      if (data?.tenantId) { setTenant(data); writeCache("profile", data); return data; }
+    } catch { /* keep what we have */ }
+    return null;
   }, []);
+  useEffect(() => { refreshProfile(); }, [refreshProfile]);
+
+  // Any API call that comes back "this needs a higher plan" (e.g. the plan changed
+  // since this page loaded) lands the user on the pricing page with an explanation.
+  useEffect(() => {
+    const onPlanRequired = (e) => {
+      const d = e.detail || {};
+      setActiveNav("billing");
+      showToast(`${d.feature ? "That feature" : "This"} is part of the ${d.required_plan_label || "paid"} plan.`, "info");
+      refreshPlans();
+    };
+    window.addEventListener("mp:plan-required", onPlanRequired);
+    return () => window.removeEventListener("mp:plan-required", onPlanRequired);
+  }, [refreshPlans, showToast]);
 
   // Once the first screen has painted, fetch the other pages' code in the
   // background so clicking them is instant instead of a fresh download.
@@ -97,6 +113,10 @@ function AppShell() {
   const displayName = tenant?.displayName || tenant?.businessName || "Loading…";
 
   function renderContent() {
+    const feature = NAV_FEATURE[activeNav];
+    if (feature && isFeatureLocked(plans, feature)) {
+      return <LockedFeature plans={plans} feature={feature} onUpgrade={() => setActiveNav("billing")} />;
+    }
     switch (activeNav) {
       case "dashboard": return <DashboardView onToast={showToast} tenant={tenant} onNavigate={setActiveNav} />;
       case "documents": return <DocumentsView onToast={showToast} />;
@@ -110,7 +130,7 @@ function AppShell() {
       case "roi": return <ROICalculatorView />;
       case "auditlog": return <AuditLogView />;
       case "assistant": return <AssistantView onNavigate={setActiveNav} />;
-      case "billing": return <BillingView tenant={tenant} />;
+      case "billing": return <BillingView plans={plans} loadFailed={plansFailed} onRetry={refreshPlans} onPlanChanged={async () => { const [p] = await Promise.all([refreshPlans(), refreshProfile()]); return p; }} onToast={showToast} />;
       case "team": return <TeamView onToast={showToast} />;
       case "admin": return <AdminPanelView onToast={showToast} />;
       default: return null;
@@ -166,7 +186,8 @@ function AppShell() {
                 >
                   <span className="icon-wrapper">{item.icon}</span>
                   <span className="nav-label">{item.label}</span>
-                  {item.badge && <span className={`nav-badge ${item.badgeClass}`}>{item.badge}</span>}
+                  {isFeatureLocked(plans, NAV_FEATURE[item.id]) && <span className="icon-wrapper" style={{ width: 13, height: 13, marginLeft: 4, opacity: 0.7 }} title="Not included in your plan" aria-label="locked"><Icons.Lock /></span>}
+                  {(() => { const b = navBadge(item, plans); return b ? <span className={`nav-badge ${b.className}`}>{b.text}</span> : null; })()}
                 </button>
               ))}
             </div>

@@ -3,6 +3,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
+import { requireFeature } from "../billing/featureGate";
 import { listInvoicesWithTaxIdentifier, listByGSTStatus } from "../repository/documents";
 import { requestGstSync } from "../actions/gst";
 import { apiError } from "../http";
@@ -10,6 +11,7 @@ import { apiError } from "../http";
 export const gstRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
 gstRoutes.use("*", requireAuth);
+gstRoutes.use("*", requireFeature("gst_sync")); // plan-gated: a no-op unless ENFORCE_PLAN_GATING=true
 
 // POST /gst/sync?period=MMYYYY — a GSTR-2B fetch is a paid external call,
 // so this reserves usage credits atomically before enqueueing the job.

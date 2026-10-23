@@ -63,4 +63,22 @@ describe("frontend ↔ Worker API contract", () => {
     expect(has("GET", "/api/v1/reconciliation/dashboard-insights")).toBe(true);
     expect(has("GET", "/api/v1/reconciliation/dashboard-insight")).toBe(true);
   });
+
+  it("the frontend's gated screens and the backend's feature table name exactly the same features", () => {
+    const front = readFileSync(join(root, "..", "frontend", "src", "planLogic.js"), "utf8");
+    const block = /NAV_FEATURE = \{([\s\S]*?)\};/.exec(front)?.[1] ?? "";
+    const frontKeys = [...block.matchAll(/:\s*"([a-z_]+)"/g)].map((m) => m[1]!).sort();
+    const backend = readFileSync(join(src, "billing", "plans.ts"), "utf8");
+    const fblock = /export const FEATURES = \{([\s\S]*?)\} as const/.exec(backend)?.[1] ?? "";
+    const backKeys = [...fblock.matchAll(/^\s*([a-z_]+):\s*\{/gm)].map((m) => m[1]!).sort();
+    expect(frontKeys.length).toBeGreaterThan(4);
+    expect(frontKeys).toEqual(backKeys);
+  });
+
+  it("the billing endpoints the pricing page uses exist", () => {
+    const has = (m: string, p: string) => routes.some((r) => r.method === m && r.pattern.test(p));
+    expect(has("GET", "/api/v1/billing/plans")).toBe(true);
+    expect(has("POST", "/api/v1/billing/checkout")).toBe(true);
+    expect(has("POST", "/api/v1/billing/verify")).toBe(true);
+  });
 });

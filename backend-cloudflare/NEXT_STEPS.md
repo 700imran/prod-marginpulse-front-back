@@ -330,6 +330,16 @@ a task list, not just prose:
 - [ ] New: after any deploy, glance at the "Smoke test the live backend" step in
       the Actions run — PASS/FAIL/WARN per check is printed there.
 
+- [ ] **URGENT — payments taken by the old Billing page.** See STATUS.md →
+      "Plans, locked features and payments". Check Razorpay for captured payments
+      since Oct 22 15:06 and make those customers whole.
+- [ ] Run `db/schema.sql` on Supabase (safe to re-run), add `RAZORPAY_WEBHOOK_SECRET`,
+      add the Razorpay webhook, then deploy — exact steps in STATUS.md.
+- [ ] After payments are verified end to end with a real ₹ test payment: set
+      `ENFORCE_PLAN_GATING = "true"` and redeploy (it is off so existing Free accounts
+      aren't locked out).
+- [ ] Decide on recurring billing (Razorpay Subscriptions) and GST invoices for sales.
+
 ## Quick file map
 
 | Need to change... | Look in... |

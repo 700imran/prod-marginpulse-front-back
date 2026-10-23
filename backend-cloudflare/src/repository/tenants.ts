@@ -12,6 +12,7 @@ export interface Tenant {
   gstinNumber: string | null;
   gstRegistered: boolean;
   planTier: string;
+  planExpiresAt: string | null;
   isActive: boolean;
   isPlatformAdmin: boolean;
   deletionRequestedAt: string | null;
@@ -22,7 +23,8 @@ const SELECT = `
   tenant_id as "tenantId", business_name as "businessName", display_name as "displayName",
   owner_email as "ownerEmail", phone_number as "phoneNumber", country_code as "countryCode",
   whatsapp_binding_phone as "whatsappBindingPhone", ingest_email_alias as "ingestEmailAlias",
-  gstin_number as "gstinNumber", gst_registered as "gstRegistered", plan_tier as "planTier",
+  gstin_number as "gstinNumber", gst_registered as "gstRegistered",
+  case when plan_expires_at is not null and plan_expires_at <= now() then 'FREE' else plan_tier end as "planTier", plan_expires_at as "planExpiresAt",
   is_active as "isActive", is_platform_admin as "isPlatformAdmin",
   deletion_requested_at as "deletionRequestedAt", created_at as "createdAt"
 `;

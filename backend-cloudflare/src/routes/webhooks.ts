@@ -5,6 +5,10 @@ import { getTenantByWhatsAppPhone, getTenantByIngestEmailAlias } from "../reposi
 import { createDocument } from "../repository/documents";
 import { uploadBytes } from "../storage";
 import { verifyMetaSignature256 } from "../security/hmac";
+import { verifyWebhookSignature } from "../billing/razorpay";
+import { activatePaidOrder } from "../repository/payments";
+import { paymentsConfigured } from "../billing/plans";
+import { reportError } from "../monitoring";
 import { setTenantContext, setPrivilegedContext } from "../security/tenantContext";
 import { apiError } from "../http";
 
@@ -166,3 +170,42 @@ function base64ToArrayBuffer(b64: string): ArrayBuffer {
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes.buffer;
 }
+
+// POST /webhook/razorpay — Razorpay's server-to-server payment notification. This
+// is the authoritative path (it fires even if the customer closes the tab right
+// after paying). Unauthenticated by nature, so everything hinges on the signature:
+// unsigned or wrongly-signed requests are rejected before the body is even parsed.
+// Activation is idempotent (repository/payments.ts), so Razorpay's retries and the
+// browser-side /billing/verify path can't double-apply.
+webhookRoutes.post("/razorpay", async (c) => {
+  if (!paymentsConfigured(c.env)) return apiError(c, 501, "NOT_IMPLEMENTED", "payments are not enabled");
+  const rawBody = await c.req.text();
+  if (!(await verifyWebhookSignature(c.env.RAZORPAY_WEBHOOK_SECRET!, rawBody, c.req.header("X-Razorpay-Signature")))) {
+    console.warn("razorpay webhook: signature verification failed, rejecting");
+    return apiError(c, 401, "UNAUTHENTICATED", "Invalid signature");
+  }
+
+  let event: { event?: string; payload?: { payment?: { entity?: { id?: string; order_id?: string; amount?: number; currency?: string; status?: string } } } };
+  try { event = JSON.parse(rawBody); } catch { return apiError(c, 400, "VALIDATION_ERROR", "invalid JSON"); }
+
+  // Only a captured payment activates anything; every other event is acknowledged and ignored.
+  const p = event.payload?.payment?.entity;
+  if ((event.event !== "payment.captured" && event.event !== "order.paid") || !p || p.status !== "captured"
+      || typeof p.id !== "string" || typeof p.order_id !== "string" || typeof p.amount !== "number" || typeof p.currency !== "string") {
+    return c.json({ ok: true, ignored: true });
+  }
+
+  const sql = c.get("sql");
+  await setPrivilegedContext(sql, { system: true }); // no logged-in tenant here; the order row says whose it is
+  try {
+    const result = await activatePaidOrder(sql, { razorpayOrderId: p.order_id, paymentId: p.id, amountPaise: p.amount, currency: p.currency });
+    if (result.status === "AMOUNT_MISMATCH") {
+      console.error("razorpay_webhook_amount_mismatch", { orderId: p.order_id, paymentId: p.id });
+      c.executionCtx.waitUntil(reportError(c.env, new Error("razorpay webhook: amount mismatch"), { tags: { area: "payments", orderId: p.order_id } }));
+    }
+    // 200 for every outcome we understand — a non-2xx would only make Razorpay retry something retrying can't fix.
+    return c.json({ ok: true, result: result.status });
+  } finally {
+    await setPrivilegedContext(sql, { system: false });
+  }
+});

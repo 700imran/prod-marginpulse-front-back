@@ -1,199 +1,155 @@
 /**
- * BillingView.jsx — Payment entry point for the app.
+ * BillingView — plans, pricing and checkout.
  *
- * Uses Razorpay checkout to create a backend order and verify it after
- * successful payment. This is intentionally kept in the dedicated Billing
- * page rather than spreading checkout logic across the app shell.
+ * Money rules (mirrored on the server, backend billing routes):
+ *  - the browser only NAMES a plan; the server decides the price and creates the order;
+ *  - "payment successful" is shown only after the server has confirmed the payment with
+ *    Razorpay — Razorpay's browser callback alone proves nothing;
+ *  - if the browser closes mid-payment, Razorpay's webhook still activates the plan.
+ * All customer-facing text here is rendered as plain text.
  */
-import { useState } from "react";
-import { tokenManager } from "../security/tokenManager";
+import { useState, useRef, useEffect } from "react";
+import { createCheckout, verifyPayment } from "../api";
+import { formatExpiry } from "../planLogic";
 
-const API_BASE = "https://api.marginpulse.in";
-const PLAN_OPTIONS = [
-  { id: "starter", label: "Starter", price: 499, description: "For solo practitioners" },
-  { id: "pro", label: "Pro", price: 1499, description: "Best for growing teams" },
-  { id: "enterprise", label: "Enterprise", price: 4999, description: "Advanced controls & scale" },
-];
+const RZP_SCRIPT = "https://checkout.razorpay.com/v1/checkout.js";
 
-function getAccessToken() {
-  return (
-    tokenManager.getAccessToken() ||
-    localStorage.getItem("mp_access_token") ||
-    localStorage.getItem("token") ||
-    ""
-  );
-}
-
-async function loadRazorpayScript() {
-  if (window.Razorpay) return;
-
-  await new Promise((resolve, reject) => {
+export function loadRazorpay() {
+  if (typeof window !== "undefined" && window.Razorpay) return Promise.resolve();
+  return new Promise((resolve, reject) => {
     const existing = document.getElementById("razorpay-checkout-script");
-    if (existing) {
-      existing.addEventListener("load", resolve, { once: true });
-      existing.addEventListener("error", () => reject(new Error("Failed to load Razorpay script.")), { once: true });
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.id = "razorpay-checkout-script";
-    script.src = "https://checkout.razorpay.com/v1/checkout.js";
-    script.async = true;
-    script.onload = resolve;
-    script.onerror = () => reject(new Error("Failed to load Razorpay script."));
-    document.body.appendChild(script);
+    const done = () => (window.Razorpay ? resolve() : reject(new Error("Razorpay failed to load.")));
+    if (existing) { existing.addEventListener("load", done, { once: true }); existing.addEventListener("error", () => reject(new Error("Razorpay failed to load.")), { once: true }); return; }
+    const s = document.createElement("script");
+    s.id = "razorpay-checkout-script"; s.src = RZP_SCRIPT; s.async = true;
+    s.onload = done; s.onerror = () => reject(new Error("Couldn't load the payment window. Check your connection and try again."));
+    document.body.appendChild(s);
   });
 }
 
-export async function startPayment(amount) {
-  const finalAmount = Number(amount || 0);
-  const token = getAccessToken();
+const rupees = (n) => `₹${Number(n).toLocaleString("en-IN")}`;
 
-  if (!token) {
-    alert("Please log in before starting a payment.");
-    return;
+export default function BillingView({ plans, loadFailed, onRetry, onPlanChanged, onToast }) {
+  const [busyPlan, setBusyPlan] = useState(null);
+  const [pending, setPending] = useState(false);   // paid, waiting for the server to confirm
+  const alive = useRef(true);
+  useEffect(() => () => { alive.current = false; }, []);
+
+  if (!plans && loadFailed) {
+    return (
+      <div className="card">
+        <div className="notice-bar error" role="alert">
+          <span>Couldn't load your plan and pricing. Please check your connection and try again.</span>
+          <button className="btn btn-ghost" onClick={onRetry}>Try again</button>
+        </div>
+      </div>
+    );
+  }
+  if (!plans) {
+    return <div className="card" aria-busy="true"><div className="skeleton" style={{ height: 18, width: "30%", marginBottom: 16 }} /><div className="skeleton" style={{ height: 120 }} /></div>;
   }
 
-  if (!finalAmount || finalAmount <= 0) {
-    alert("Please enter a valid amount.");
-    return;
-  }
+  const rank = (id) => plans.plans.findIndex((p) => p.id === id);
+  const featureLabel = (k) => plans.features[k]?.label || k;
+  const expiry = formatExpiry(plans.planExpiresAt);
 
-  try {
-    await loadRazorpayScript();
-
-    const orderRes = await fetch(`${API_BASE}/api/v1/billing/create-order`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ amount: finalAmount, currency: "INR" }),
-    });
-
-    const orderData = await orderRes.json().catch(() => ({}));
-
-    if (!orderRes.ok || !orderData?.orderId || !orderData?.keyId) {
-      throw new Error(orderData?.message || "Failed to create payment order.");
+  // After a payment the server may still be confirming it; look for the plan to change.
+  async function waitForActivation(expectedPlan) {
+    setPending(true);
+    for (let i = 0; i < 15 && alive.current; i++) {
+      await new Promise((r) => setTimeout(r, 4000));
+      const fresh = await onPlanChanged?.();
+      if (fresh?.currentPlan === expectedPlan) { setPending(false); onToast?.("Your plan is now active.", "success"); return; }
     }
-
-    const userEmail = localStorage.getItem("userEmail") || localStorage.getItem("mp_user_email") || "";
-
-    const rzp = new window.Razorpay({
-      key: orderData.keyId,
-      order_id: orderData.orderId,
-      currency: "INR",
-      name: "MarginPulse",
-      description: "Subscription Payment",
-      handler: async function (response) {
-        const verifyRes = await fetch(`${API_BASE}/api/v1/billing/verify-payment`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            razorpay_order_id: response.razorpay_order_id,
-            razorpay_payment_id: response.razorpay_payment_id,
-            razorpay_signature: response.razorpay_signature,
-          }),
-        });
-
-        const verifyData = await verifyRes.json().catch(() => ({}));
-
-        if (verifyRes.ok) {
-          alert("Payment successful!");
-          return;
-        }
-
-        throw new Error(verifyData?.message || "Payment verification failed.");
-      },
-      prefill: {
-        email: userEmail,
-      },
-      theme: { color: "#18c496" },
-    });
-
-    rzp.on("payment.failed", function (response) {
-      alert(`Payment failed: ${response?.error?.description || "Unknown error"}`);
-    });
-
-    rzp.open();
-  } catch (error) {
-    console.error("[BillingView] Payment failed:", error);
-    alert(error?.message || "Something went wrong while starting the payment.");
+    if (alive.current) {
+      setPending(false);
+      onToast?.("Payment received. Your plan will switch on shortly — if it hasn't within a few minutes, contact support with your payment confirmation.", "info");
+    }
   }
-}
 
-export default function BillingView({ tenant }) {
-  const [isPaying, setIsPaying] = useState(false);
-  const [selectedPlanId, setSelectedPlanId] = useState("pro");
-  const planLabel = tenant?.planTier === "FREE" ? "Auditor Free" : tenant?.planTier || "Auditor Free";
-  const selectedPlan = PLAN_OPTIONS.find((plan) => plan.id === selectedPlanId) || PLAN_OPTIONS[1];
-
-  const handleUpgrade = async () => {
-    setIsPaying(true);
+  async function upgrade(plan) {
+    if (busyPlan) return;
+    setBusyPlan(plan.id);
     try {
-      await startPayment(selectedPlan.price);
+      await loadRazorpay();
+      const res = await createCheckout(plan.id);
+      if (res.status !== 200 || !res.body?.orderId) {
+        const msg = res.body?.error?.message;
+        onToast?.(res.status === 501 ? "Online payment isn't switched on yet." : (res.status === 409 || res.status === 400) && msg ? msg : "Couldn't start the payment. Please try again.", "error");
+        return;
+      }
+      const o = res.body;
+      await new Promise((resolve) => {
+        const rzp = new window.Razorpay({
+          key: o.keyId, order_id: o.orderId, amount: o.amount, currency: o.currency,
+          name: "MarginPulse", description: `${o.planLabel} plan — 1 month`,
+          prefill: { email: o.email }, theme: { color: "#18c496" },
+          modal: { ondismiss: () => { onToast?.("Payment cancelled — you haven't been charged.", "info"); resolve(); } },
+          handler: async (resp) => {
+            const v = await verifyPayment(resp);
+            if (v.status === 200 && v.body?.status === "ACTIVE") {
+              await onPlanChanged?.();
+              onToast?.(`You're now on ${o.planLabel}. Thank you!`, "success");
+            } else if (v.status === 202) {
+              waitForActivation(plan.id);
+            } else {
+              const why = v.body?.error?.message || "We couldn't confirm your payment.";
+              onToast?.(`${why} If money was taken, your plan will be applied automatically; if it isn't within a few minutes, contact support.`, "error");
+            }
+            resolve();
+          },
+        });
+        rzp.on("payment.failed", (r) => { onToast?.(`Payment failed: ${r?.error?.description || "please try again"}`, "error"); resolve(); });
+        rzp.open();
+      });
+    } catch (e) {
+      onToast?.(e?.message || "Something went wrong starting the payment.", "error");
     } finally {
-      setIsPaying(false);
+      if (alive.current) setBusyPlan(null);
     }
-  };
+  }
 
   return (
-    <div className="card">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
-        <h3 style={{ fontSize: 18 }}>Current Plan: {planLabel}</h3>
-        <span className="nav-badge badge-pro" style={{ padding: "4px 8px" }}>Razorpay ready</span>
+    <div>
+      <div className="card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+          <h3 style={{ fontSize: 18 }}>Current plan: {plans.currentPlanLabel}</h3>
+          {plans.paymentsEnabled ? <span className="nav-badge badge-pro" style={{ padding: "4px 8px" }}>Secure payment by Razorpay</span> : null}
+        </div>
+        {expiry && plans.currentPlan !== "FREE" && <p style={{ fontSize: 13, color: "var(--text-gray)", marginTop: 6 }}>Active until {expiry}. Paying again before then adds another month.</p>}
+        {pending && <div className="notice-bar" role="status" style={{ marginTop: 12 }}>Payment received — confirming it now…</div>}
+        {!plans.paymentsEnabled && <div className="notice-bar" role="status" style={{ marginTop: 12 }}>Online payment isn't switched on yet. Plans and prices are shown below.</div>}
       </div>
 
-      <h4 style={{ marginBottom: 16, fontSize: 16 }}>Choose a plan</h4>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16, marginBottom: 24 }}>
-        {PLAN_OPTIONS.map((plan) => {
-          const active = plan.id === selectedPlanId;
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 16 }}>
+        {plans.plans.map((p) => {
+          const isCurrent = p.id === plans.currentPlan;
+          const included = rank(p.id) < rank(plans.currentPlan);   // a lower plan than the one you have
+          const isFree = p.id === "FREE";
           return (
-            <button
-              key={plan.id}
-              type="button"
-              onClick={() => setSelectedPlanId(plan.id)}
-              style={{
-                textAlign: "left",
-                padding: 16,
-                borderRadius: 12,
-                border: active ? "2px solid var(--primary-color)" : "1px solid rgba(255,255,255,0.1)",
-                background: active ? "rgba(24, 196, 150, 0.08)" : "rgba(255,255,255,0.02)",
-                color: "var(--text-primary)",
-                cursor: "pointer",
-                transition: "all 0.2s ease",
-              }}
-            >
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>{plan.label}</div>
-              <div style={{ fontSize: 24, fontWeight: 800, marginBottom: 6 }}>₹{plan.price}</div>
-              <div style={{ fontSize: 12, color: "var(--text-gray)" }}>{plan.description}</div>
-            </button>
+            <div key={p.id} className="card" style={{ marginBottom: 0, border: isCurrent ? "2px solid var(--primary-color)" : undefined }} data-testid={`plan-${p.id}`}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>{p.label}{isCurrent ? " · current" : ""}</div>
+              <div style={{ fontSize: 26, fontWeight: 800, marginBottom: 4 }}>{isFree ? "₹0" : p.priceInr != null ? <>{rupees(p.priceInr)}<span style={{ fontSize: 13, fontWeight: 500, color: "var(--text-gray)" }}> /month</span></> : "—"}</div>
+              <div style={{ fontSize: 12, color: "var(--text-gray)", marginBottom: 12 }}>{p.monthlyCredits.toLocaleString("en-IN")} usage credits / month</div>
+              <ul style={{ listStyle: "none", fontSize: 13, lineHeight: 1.9, color: "var(--text-gray)", marginBottom: 16, minHeight: 60 }}>
+                {p.features.length === 0 && <li>Core reconciliation</li>}
+                {p.features.map((f) => <li key={f}><strong style={{ color: "var(--primary-color)" }}>✓</strong> {featureLabel(f)}</li>)}
+              </ul>
+              {isFree ? null : isCurrent ? (
+                <button className="btn btn-primary" disabled={!p.purchasable || !!busyPlan || pending} onClick={() => upgrade(p)}>{busyPlan === p.id ? "Opening payment…" : "Renew — add a month"}</button>
+              ) : included ? (
+                <button className="btn btn-ghost" disabled>Included in your plan</button>
+              ) : (
+                <button className="btn btn-primary" disabled={!p.purchasable || !!busyPlan || pending} onClick={() => upgrade(p)}>
+                  {busyPlan === p.id ? "Opening payment…" : p.purchasable ? `Upgrade to ${p.label}` : "Not available yet"}
+                </button>
+              )}
+            </div>
           );
         })}
       </div>
-
-      <h4 style={{ marginBottom: 16, fontSize: 16 }}>Pro Features Include:</h4>
-      <ul style={{ listStyle: "none", lineHeight: 2.2, color: "var(--text-gray)", marginBottom: 30, fontSize: 14 }}>
-        <li><strong style={{ color: "var(--primary-color)" }}>✓</strong> Unlimited Document Extraction</li>
-        <li><strong style={{ color: "var(--primary-color)" }}>✓</strong> Multi-currency Reconciliation</li>
-        <li><strong style={{ color: "var(--primary-color)" }}>✓</strong> Audit Team Management (Invite CAs)</li>
-        <li><strong style={{ color: "var(--primary-color)" }}>✓</strong> Automated GSTR-3B Drafting</li>
-      </ul>
-
-      <button
-        className="btn btn-primary"
-        onClick={handleUpgrade}
-        disabled={isPaying}
-        style={{ opacity: isPaying ? 0.7 : 1 }}
-      >
-        {isPaying ? "Processing payment..." : `Upgrade to ${selectedPlan.label} — ₹${selectedPlan.price}`}
-      </button>
-
       <p style={{ fontSize: 12, color: "var(--text-gray)", marginTop: 14 }}>
-        Payment is processed through Razorpay via the MarginPulse billing API at <strong>https://api.marginpulse.in</strong>.
+        Each payment buys one month. Prices in Indian rupees. Payments are processed by Razorpay; MarginPulse never sees your card details.
       </p>
     </div>
   );

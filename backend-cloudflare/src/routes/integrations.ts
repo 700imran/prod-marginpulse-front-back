@@ -3,6 +3,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
+import { requireFeature } from "../billing/featureGate";
 import { listIntegrations, getIntegration, upsertIntegration, disconnectIntegration, markIntegrationSynced } from "../repository/integrations";
 import { bulkInsertBankTransactions } from "../repository/bankTransactions";
 import { encryptField, decryptField } from "../security/fieldEncryption";
@@ -30,9 +31,9 @@ function dataConnectorFor(provider: string): DataConnector | null {
   }
 }
 
-integrationRoutes.get("/", requireAuth, async (c) => c.json({ items: await listIntegrations(c.get("sql"), c.get("tenant").tenantId) }));
+integrationRoutes.get("/", requireAuth, requireFeature("integrations"), async (c) => c.json({ items: await listIntegrations(c.get("sql"), c.get("tenant").tenantId) }));
 
-integrationRoutes.post("/:provider/connect", requireAuth, async (c) => {
+integrationRoutes.post("/:provider/connect", requireAuth, requireFeature("integrations"), async (c) => {
   const provider = c.req.param("provider").toUpperCase();
   const connector = dataConnectorFor(provider);
   if (!connector) return apiError(c, 501, "NOT_IMPLEMENTED", `${provider} is not yet implemented — see src/integrations/connector.ts for what's needed to add it`);
@@ -69,7 +70,7 @@ integrationRoutes.post("/:provider/connect", requireAuth, async (c) => {
   return c.json(saved, 201);
 });
 
-integrationRoutes.post("/:provider/sync", requireAuth, async (c) => {
+integrationRoutes.post("/:provider/sync", requireAuth, requireFeature("integrations"), async (c) => {
   const provider = c.req.param("provider").toUpperCase();
   const connector = dataConnectorFor(provider);
   if (!connector) return apiError(c, 501, "NOT_IMPLEMENTED", `${provider} does not support data sync`);
@@ -104,14 +105,14 @@ integrationRoutes.post("/:provider/sync", requireAuth, async (c) => {
   return c.json({ transactions_synced: created, found: txns.length });
 });
 
-integrationRoutes.post("/:provider/disconnect", requireAuth, async (c) => {
+integrationRoutes.post("/:provider/disconnect", requireAuth, requireFeature("integrations"), async (c) => {
   await disconnectIntegration(c.get("sql"), c.get("tenant").tenantId, c.req.param("provider").toUpperCase());
   return c.body(null, 204);
 });
 
 // --- Slack OAuth connect (separate from the API-key flow above) ----------
 
-integrationRoutes.get("/slack/connect", requireAuth, async (c) => {
+integrationRoutes.get("/slack/connect", requireAuth, requireFeature("integrations"), async (c) => {
   const tenant = c.get("tenant");
   const state = crypto.randomUUID();
   await storeOAuthState(c.env, state, tenant.tenantId);

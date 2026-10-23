@@ -12,11 +12,13 @@ import type { Sql } from "./db";
 export const REQUIRED_TABLES = [
   "tenants", "documents", "anomalies", "audit_log", "tax_identifiers", "bank_accounts", "team_members",
   "credit_wallets", "credit_ledger", "usage_events", // added by the hardening pass (billing)
+  "payment_orders", // plan purchases
 ] as const;
 
 export const REQUIRED_COLUMNS: readonly (readonly [table: string, column: string])[] = [
   ["documents", "deleted_at"],              // soft delete / trash
   ["tenants", "deletion_requested_at"],     // account-deletion grace period
+  ["tenants", "plan_expires_at"],           // paid plan validity
 ];
 
 export interface SchemaStatus {

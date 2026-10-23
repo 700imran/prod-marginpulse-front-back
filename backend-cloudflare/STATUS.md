@@ -719,6 +719,70 @@ Limits: the smoke test can't see Supabase RLS correctness or business logic; a
 rollback restores the previous *Worker version* but cannot undo database
 changes (schema.sql is additive/idempotent, so none are needed).
 
+## Plans, locked features and payments (new) — and a problem found on `main`
+
+**Found on `main` (commits e650640, c1234a4, 0e000f0, Oct 22) — already auto-deployed
+to production at 16:44 that day.** The Razorpay billing routes could not work and
+were unsafe: (1) `verify-payment` compared a *base64* HMAC against Razorpay's *hex*
+signature, so every real payment failed verification; (2) `create-order` took the
+price from the browser; (3) a verified payment only logged a line — no plan change,
+no credits, no order record; (4) plain `!==` signature comparison; no webhook.
+**Anyone who paid through that Billing page since then was charged and received
+nothing.** Check Razorpay → Payments for captured payments from Oct 22 onward and
+either refund them or apply the plan by hand (`update tenants set plan_tier=…,
+plan_expires_at=…`).
+
+**What replaced it** (merged into this branch; `main`'s two routes now answer 410
+"refresh the page" so a stale page can't take money):
+- `backend-cloudflare/src/billing/plans.ts` — plans and which feature needs which
+  plan, one table served to the app by `GET /billing/plans`. Names/prices come from
+  your Billing page: Starter ₹499, Pro ₹1499, Enterprise ₹4999 (database tiers
+  STARTER / GROWTH / ENTERPRISE; "Pro" is the GROWTH tier). Prices live in
+  `PLAN_PRICES_INR` in `wrangler.toml`.
+- Plan-gated routes (`requireFeature`): Tax Portal Sync, Reconciliation Rules, Audit
+  Trail → Starter+; API & Integrations, Notifications, Audit Team → Pro+. They answer
+  `402 PLAN_REQUIRED` with what to upgrade to. **Off by default**
+  (`ENFORCE_PLAN_GATING = "false"`): every existing account is on Free, so switching
+  it on locks all of them out of features that work today. Flip it to `"true"` and
+  redeploy once payments are confirmed working.
+- Frontend: locked features stay **visible** in the sidebar (lock icon + plan badge,
+  derived from the same table); opening one shows what it does and a button to the
+  pricing page instead of a broken screen. Any API call answered with PLAN_REQUIRED
+  also sends the user to the pricing page. The Billing page lists plans, current plan
+  and expiry, and runs Razorpay checkout.
+- Payments: server fixes the amount; `POST /billing/checkout` creates the order;
+  `POST /billing/verify` checks the signature (constant-time, hex) AND asks Razorpay
+  whether the payment was really captured for that order and amount; `POST
+  /webhook/razorpay` (signed) does the same independently. Both call one
+  row-locked, idempotent `activatePaidOrder`: plan + 30 days (renewal extends), extra
+  credits granted once, order recorded in `payment_orders`. Tested on real Postgres,
+  including a deterministic double-delivery race and removal of the lock failing a test.
+- An expired plan reads as Free at read time (no cron needed).
+
+**To turn payments on (nothing here is possible from code):**
+1. Supabase → SQL editor → run all of `backend-cloudflare/db/schema.sql`. It is now
+   safe to re-run on an existing database (the one non-idempotent statement was
+   fixed; tested by upgrading a database built from the old schema, three times,
+   with data intact). `/healthz` reports `schema: ok` only when it's been applied.
+2. Cloudflare → the Worker → Settings → add secret `RAZORPAY_WEBHOOK_SECRET`
+   (`RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` already exist from the earlier work).
+3. Razorpay dashboard → Settings → Webhooks → add
+   `https://api.marginpulse.in/webhook/razorpay`, events `payment.captured` and
+   `order.paid`, with that same secret. Keep **auto-capture on** (plans only activate
+   on captured payments).
+4. Deploy (Actions → "Deploy Cloudflare Worker" → Run workflow, mode `deploy`).
+
+Not built: automatic recurring billing (each payment buys one month; Razorpay
+Subscriptions/UPI AutoPay would be the next step), refunds (a refund does not
+downgrade the plan), and a GST tax invoice for each sale (you will likely need one
+for B2B subscriptions — check with your CA).
+
+**Also found:** `BillingView` hard-coded `https://api.marginpulse.in` while the rest of
+the app used `REACT_APP_API_URL || ''` — i.e. if that variable wasn't set when the
+frontend was built, every other screen called the frontend's own address and spun
+forever. A production build now falls back to `api.marginpulse.in` (an explicit
+`REACT_APP_API_URL` still wins).
+
 ## Before you deploy
 
 1. Fix the GitHub repo's incomplete push if you still need the Go

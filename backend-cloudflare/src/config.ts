@@ -26,6 +26,8 @@ export interface Env {
   ALLOWED_ORIGINS?: string; // extra browser origins allowed by CORS, comma-separated (exact match)
   INGEST_EMAIL_ADDRESS: string;
   AI_INSIGHTS_DAILY_BUDGET_USD: string;
+  ENFORCE_PLAN_GATING?: string;      // "true" locks plan features for tenants below the required plan; anything else leaves every feature open
+  PLAN_PRICES_INR?: string;          // JSON, whole rupees per month: {"STARTER":…,"GROWTH":…,"ENTERPRISE":…}. Unset = nothing is for sale.
   ASSISTANT_MUTATIONS_ENABLED?: string; // "true" exposes the assistant's Phase 2 (confirm-first) tools; anything else keeps it read-only
 
   // --- secrets (`wrangler secret put <NAME>`) ---
@@ -39,6 +41,7 @@ export interface Env {
   GST_API_USERNAME: string;       // separate from client-id — used only by gstsync.ts's /authenticate call
   RAZORPAY_KEY_ID: string;
   RAZORPAY_KEY_SECRET: string;
+  RAZORPAY_WEBHOOK_SECRET?: string; // `wrangler secret put RAZORPAY_WEBHOOK_SECRET` — the secret set on the webhook in Razorpay's dashboard; plan payments stay off until it exists
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   SLACK_CLIENT_ID: string;

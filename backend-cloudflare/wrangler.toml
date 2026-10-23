@@ -155,3 +155,15 @@ AI_INSIGHTS_DAILY_BUDGET_USD = "5.00"
 # Assistant Phase 2 (sync_gst / soft_delete_document / restore_document, each behind an explicit confirmation).
 # Off until Phase 1 (read-only) has been live and used — see WORKFLOW.md.
 ASSISTANT_MUTATIONS_ENABLED = "false"
+
+# --- Plans & payments ---------------------------------------------------------
+# Whole rupees per month, as shown on the Billing page (frontend BillingView.jsx,
+# main @ 2026-10-22): Starter 499, Pro 1499, Enterprise 4999. The SERVER decides the
+# amount charged; the browser only names a plan. Database tiers: STARTER=Starter,
+# GROWTH=Pro, ENTERPRISE=Enterprise.
+PLAN_PRICES_INR = '{"STARTER":499,"GROWTH":1499,"ENTERPRISE":4999}'
+# "true" locks plan features for tenants below the required plan (402 PLAN_REQUIRED);
+# anything else leaves every feature open. Left off because every existing tenant is
+# on FREE: turning it on locks them all out of GST sync, audit trail, team, etc. Flip
+# it only once payments are confirmed working end to end (see STATUS.md).
+ENFORCE_PLAN_GATING = "false"

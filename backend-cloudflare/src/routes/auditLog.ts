@@ -7,12 +7,14 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
+import { requireFeature } from "../billing/featureGate";
 import { listAuditLog } from "../repository/auditLog";
 import { apiError } from "../http";
 
 export const auditLogRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
 auditLogRoutes.use("*", requireAuth);
+auditLogRoutes.use("*", requireFeature("audit_log"));
 
 const ENTITY_TYPE = /^[A-Z][A-Z0-9_]{0,39}$/;
 // audit_log.entity_id is a uuid column: anything else would make Postgres throw (a 500), so reject it up front.

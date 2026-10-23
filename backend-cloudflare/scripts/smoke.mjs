@@ -12,6 +12,8 @@
 //   CORS_ORIGINS     comma-separated origins the backend must ALLOW (defaults to FRONTEND_URLS). Kept
 //                    separate so a deploy gate can test the backend alone, without failing on a
 //                    frontend that simply hasn't been redeployed yet.
+//   API_HOSTS        comma-separated extra hostnames the built frontend may use to reach the backend
+//                    (default: api.marginpulse.in, the backend's custom domain)
 //   SMOKE_TOKEN      a signed-in user's Supabase access token → also runs authenticated checks
 //   SMOKE_INCLUDE_AI 1 → also exercises endpoints that call the AI model and spend a credit
 //   EXPECT_MUTATIONS "off" (default) | "on" — whether assistant actions should be disabled
@@ -23,7 +25,7 @@ const REFUSED_ORIGIN = "https://smoke-test-not-allowed.invalid";
 export async function runSmoke(opts) {
   const {
     backendUrl, frontendUrls = [], corsOrigins = frontendUrls, token, includeAi = false, expectMutations = "off",
-    fetchImpl = globalThis.fetch, timeoutMs = 20000,
+    apiHosts = ["api.marginpulse.in"], fetchImpl = globalThis.fetch, timeoutMs = 20000,
   } = opts;
   const base = backendUrl.replace(/\/+$/, "");
   const results = [];
@@ -104,6 +106,18 @@ export async function runSmoke(opts) {
     const { res } = await call("POST", `${base}/api/v1/assistant/message`, { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message: "hi" }) });
     expect(res.status === 401, `HTTP ${res.status} (expected 401)`);
   });
+  await check("auth: GET /api/v1/billing/plans requires a token (401)", async () => {
+    const { res } = await call("GET", `${base}/api/v1/billing/plans`);
+    expect(res.status === 401, `HTTP ${res.status} (expected 401)`);
+  });
+  await check("payments: POST /api/v1/billing/checkout requires a token (401)", async () => {
+    const { res } = await call("POST", `${base}/api/v1/billing/checkout`, { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ plan: "STARTER" }) });
+    expect(res.status === 401, `HTTP ${res.status} (expected 401)`);
+  });
+  await check("payments: the Razorpay webhook rejects an unsigned request (401, or 501 if payments are off)", async () => {
+    const { res } = await call("POST", `${base}/webhook/razorpay`, { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "payment.captured", payload: { payment: { entity: { id: "pay_x", order_id: "order_x", amount: 100, currency: "INR", status: "captured" } } } }) });
+    expect(res.status === 401 || res.status === 501, `HTTP ${res.status} — an unsigned payment notification must never be accepted`);
+  });
   await check("auth: a garbage bearer token is rejected (401)", async () => {
     const { res } = await call("GET", probe, { headers: { Authorization: "Bearer not.a.real.token" } });
     expect(res.status === 401, `HTTP ${res.status} (expected 401)`);
@@ -170,7 +184,8 @@ export async function runSmoke(opts) {
       const src = /<script[^>]+src="([^"]*\/static\/js\/main\.[^"]+\.js)"/.exec(text)?.[1];
       expect(src, "couldn't find the main script in the page");
       const js = (await call("GET", new URL(src, f + "/").toString())).text;
-      expect(js.includes(backendHost), `the built app doesn't contain ${backendHost} — REACT_APP_API_URL was missing or wrong at build time`);
+      const hosts = [backendHost, ...apiHosts];
+      expect(hosts.some((h) => js.includes(h)), `the built app contains none of ${hosts.join(", ")} — REACT_APP_API_URL was missing or wrong at build time`);
     });
   }
 
@@ -209,6 +224,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     backendUrl,
     frontendUrls: list(process.env.FRONTEND_URLS),
     corsOrigins: process.env.CORS_ORIGINS === undefined ? undefined : list(process.env.CORS_ORIGINS),
+    apiHosts: process.env.API_HOSTS === undefined ? undefined : list(process.env.API_HOSTS),
     token: process.env.SMOKE_TOKEN || undefined,
     includeAi: process.env.SMOKE_INCLUDE_AI === "1",
     expectMutations: process.env.EXPECT_MUTATIONS === "on" ? "on" : "off",
