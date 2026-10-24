@@ -1,18 +1,3 @@
-/**
- * api.js — Centralised API client for MarginPulse Pro frontend.
- * All fetch calls go through here. Auth token comes from Supabase's
- * session (via tokenManager, which wraps supabase-js) — not raw
- * localStorage reads under this app's own keys, since Supabase
- * persists its session under its own key. See supabaseClient.js and
- * security/tokenManager.js.
- *
- * DEPLOYMENT NOTE: this frontend deploys as a standalone static site
- * on Vercel — REACT_APP_API_URL, REACT_APP_SUPABASE_URL, and
- * REACT_APP_SUPABASE_ANON_KEY MUST be set as build-time environment
- * variables there (Create React App bakes process.env.REACT_APP_*
- * into the bundle AT BUILD TIME, not at runtime — changing them
- * requires a rebuild, not just a redeploy of the same build).
- */
 import { supabase } from './supabaseClient';
 import { tokenManager } from './security/tokenManager';
 import { getOcrLines } from './ocr';
@@ -31,6 +16,26 @@ function authHeaders() {
   };
 }
 
+function normalizeProfile(data) {
+  if (!data || typeof data !== 'object') return data;
+  return {
+    ...data,
+    tenantId: data.tenant_id ?? data.tenantId ?? '',
+    displayName: data.display_name ?? data.displayName ?? data.business_name ?? data.businessName ?? '',
+    businessName: data.business_name ?? data.businessName ?? '',
+    ownerEmail: data.owner_email ?? data.ownerEmail ?? '',
+    phoneNumber: data.phone_number ?? data.phoneNumber ?? '',
+    countryCode: data.country_code ?? data.countryCode ?? '',
+    gstinNumber: data.gstin_number ?? data.gstinNumber ?? '',
+    gstRegistered: Boolean(data.gst_registered ?? data.gstRegistered ?? false),
+    whatsappBindingPhone: data.whatsapp_binding_phone ?? data.whatsappBindingPhone ?? '',
+    ingestEmailAlias: data.ingest_email_alias ?? data.ingestEmailAlias ?? '',
+    planTier: data.plan_tier ?? data.planTier ?? '',
+    isPlatformAdmin: Boolean(data.is_platform_admin ?? data.isPlatformAdmin ?? false),
+    createdAt: data.created_at ?? data.createdAt ?? '',
+  };
+}
+
 async function request(method, path, body) {
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -38,28 +43,18 @@ async function request(method, path, body) {
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
   if (res.status === 401) {
-    // Try Supabase's own refresh (it also auto-refreshes in the
-    // background, but this covers the case where a request landed
-    // just before that had a chance to run).
     const { data, error } = await supabase.auth.refreshSession();
     if (error || !data?.session) {
       tokenManager.clearTokens();
       window.location.href = '/';
       return null;
     }
-    // Retry original request with the refreshed token
     return request(method, path, body);
   }
   return res.json();
 }
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
-// Sign-in/sign-up themselves live in LoginPage.jsx, calling Supabase
-// directly (supabase.auth.signInWithPassword / signUp) — there's no
-// /api/v1/auth/login or /register endpoint on this backend anymore for
-// this module to wrap. This file keeps only the two things the rest of
-// the app actually calls on api.* : logout and an auth-state check.
-
+// ── Auth ────────────────────────────────────────────────────────────
 export function logout() {
   tokenManager.clearTokens();
   window.location.href = '/';
@@ -69,12 +64,12 @@ export function isLoggedIn() {
   return tokenManager.isAuthenticated();
 }
 
-// ── Dashboard ─────────────────────────────────────────────────────────────────
+// ── Dashboard ──────────────────────────────────────────────────────────
 export async function getDashboard(period = '2026-Q2') {
   return request('GET', `/api/v1/reconciliation/dashboard-summary?tax_period=${period}`);
 }
 
-// ── Documents ─────────────────────────────────────────────────────────────────
+// ── Documents ──────────────────────────────────────────────────────────
 export async function listDocuments(status, docType) {
   const params = new URLSearchParams();
   if (status) params.append('status', status);
@@ -82,11 +77,6 @@ export async function listDocuments(status, docType) {
   return request('GET', `/api/v1/documents?${params}`);
 }
 
-// OCR runs client-side before the file ever reaches the network — see
-// ocr/index.js for why (no AWS account for a server-side OCR Lambda).
-// This is always best-effort: any OCR failure just means the document
-// uploads without extracted fields (ocrAvailable: false server-side),
-// never blocks the upload itself.
 export async function uploadDocument(file, docType = 'INVOICE') {
   const form = new FormData();
   form.append('file', file);
@@ -109,7 +99,6 @@ export async function uploadDocument(file, docType = 'INVOICE') {
   return res.json();
 }
 
-// ── Bank CSV ──────────────────────────────────────────────────────────────────
 export async function uploadBankCSV(file, bankName = '') {
   const form = new FormData();
   form.append('file', file);
@@ -121,7 +110,7 @@ export async function uploadBankCSV(file, bankName = '') {
   return res.json();
 }
 
-// ── Reconciliation ────────────────────────────────────────────────────────────
+// ── Reconciliation ────────────────────────────────────────────────────────
 export async function triggerReconciliation() {
   return request('POST', '/api/v1/reconciliation/run');
 }
@@ -134,19 +123,14 @@ export async function resolveAnomaly(anomalyId) {
   return request('POST', `/api/v1/reconciliation/anomaly/${anomalyId}/resolve`);
 }
 
-// ── Dashboard insights (ITC risk, vendor follow-up, filing deadlines) ─────────
 export async function getDashboardInsights() {
   return request('GET', '/api/v1/dashboard/insights');
 }
 
-// ── Missing invoice detection ─────────────────────────────────────────────────
 export async function detectMissingInvoices() {
   return request('POST', '/api/v1/reconciliation/detect-missing-invoices');
 }
 
-// ── Reconciliation report export (CSV) ────────────────────────────────────────
-// Not JSON, so this bypasses the shared request() helper and triggers a
-// browser download directly rather than returning parsed data.
 export async function downloadReconciliationReport() {
   const res = await fetch(`${BASE}/api/v1/reconciliation/export`, {
     method: 'GET',
@@ -167,12 +151,10 @@ export async function downloadReconciliationReport() {
   return true;
 }
 
-// ── Manual correction workflow ────────────────────────────────────────────────
 export async function correctDocument(documentId, fields, reason) {
   return request('PATCH', `/api/v1/documents/${documentId}/correct`, { ...fields, reason });
 }
 
-// ── Audit trail ────────────────────────────────────────────────────────────────
 export async function getDocumentAuditLog(documentId) {
   return request('GET', `/api/v1/documents/${documentId}/audit-log`);
 }
@@ -185,12 +167,10 @@ export async function getAuditLog(entityType, entityId, limit = 100) {
   return request('GET', `/api/v1/audit-log?${params}`);
 }
 
-// ── ROI calculator (public — no auth required, works for marketing site too) ─
 export async function calculateROI(payload) {
   return request('POST', '/api/v1/roi-calculator', payload);
 }
 
-// ── GST ───────────────────────────────────────────────────────────────────────
 export async function getVendorGSTStatus() {
   return request('GET', '/api/v1/gst/vendor-status');
 }
@@ -203,27 +183,31 @@ export async function getITCSummary() {
   return request('GET', '/api/v1/gst/itc-summary');
 }
 
-// ── Comms ─────────────────────────────────────────────────────────────────────
 export async function generateReminder(documentId, issueType = 'GST_PORTAL_MISMATCH') {
   return request('GET', `/api/v1/comms/generate-reminder?document_id=${documentId}&issue_type=${issueType}`);
 }
 
-// ── Health ────────────────────────────────────────────────────────────────────
 export async function healthCheck() {
   const res = await fetch(`${BASE}/health`);
   return res.json();
 }
 
-// ── Profile (Stage 1) ─────────────────────────────────────────────────────────
+// ── Profile (Stage 1) ───────────────────────────────────────────────────────
 export async function getProfile() {
-  return request('GET', '/api/v1/auth/me');
+  const data = await request('GET', '/api/v1/auth/me');
+  return data ? normalizeProfile(data) : null;
 }
 
 export async function updateProfile(fields) {
-  // fields: { business_name?, display_name?, phone_number? } — only send
-  // keys that are actually being changed; the backend treats this as a
-  // true partial update (PATCH semantics), not a full overwrite.
-  return request('PATCH', '/api/v1/auth/me', fields);
+  const payload = {
+    ...(fields.displayName !== undefined ? { display_name: fields.displayName || null } : {}),
+    ...(fields.businessName !== undefined ? { business_name: fields.businessName || null } : {}),
+    ...(fields.phoneNumber !== undefined ? { phone_number: fields.phoneNumber || null } : {}),
+    ...(fields.whatsappBindingPhone !== undefined ? { whatsapp_binding_phone: fields.whatsappBindingPhone || null } : {}),
+    ...(fields.ingestEmailAlias !== undefined ? { ingest_email_alias: fields.ingestEmailAlias || null } : {}),
+  };
+  const res = await request('PATCH', '/api/v1/auth/me', payload);
+  return res ? normalizeProfile(res) : null;
 }
 
 export async function changePassword(currentPassword, newPassword) {
@@ -233,7 +217,6 @@ export async function changePassword(currentPassword, newPassword) {
   });
 }
 
-// ── Tax Identifiers (GSTIN / PAN) ──────────────────────────────────────────────
 export async function listTaxIdentifiers() {
   return request('GET', '/api/v1/tax-identifiers');
 }
@@ -258,13 +241,11 @@ export async function setPrimaryTaxIdentifier(taxIdentifierId) {
   return request('POST', `/api/v1/tax-identifiers/${taxIdentifierId}/set-primary`);
 }
 
-// ── Bank Accounts ───────────────────────────────────────────────────────────────
 export async function listBankAccounts() {
   return request('GET', '/api/v1/bank-accounts');
 }
 
 export async function linkBankAccount(fields) {
-  // fields: { bank_name, account_holder_name, account_number, ifsc_code, account_type }
   return request('POST', '/api/v1/bank-accounts', fields);
 }
 
@@ -284,7 +265,6 @@ export async function setPrimaryBankAccount(bankAccountId) {
   return request('POST', `/api/v1/bank-accounts/${bankAccountId}/set-primary`);
 }
 
-// ── Settings: Reconciliation Rules ──────────────────────────────────────────────
 export async function getReconciliationSettings() {
   return request('GET', '/api/v1/settings/reconciliation');
 }
@@ -293,7 +273,6 @@ export async function updateReconciliationSettings(fields) {
   return request('PATCH', '/api/v1/settings/reconciliation', fields);
 }
 
-// ── Settings: Notifications ──────────────────────────────────────────────────────
 export async function getNotificationSettings() {
   return request('GET', '/api/v1/settings/notifications');
 }
@@ -302,7 +281,6 @@ export async function updateNotificationSettings(fields) {
   return request('PATCH', '/api/v1/settings/notifications', fields);
 }
 
-// ── Settings: Integrations ───────────────────────────────────────────────────────
 export async function getIntegrationSettings() {
   return request('GET', '/api/v1/settings/integrations');
 }
@@ -311,7 +289,6 @@ export async function updateIntegrationSettings(fields) {
   return request('PATCH', '/api/v1/settings/integrations', fields);
 }
 
-// ── Audit Team ───────────────────────────────────────────────────────────────────
 export async function listTeamMembers() {
   return request('GET', '/api/v1/team');
 }
@@ -324,7 +301,6 @@ export async function revokeTeamMember(teamMemberId) {
   return request('POST', `/api/v1/team/${teamMemberId}/revoke`);
 }
 
-// ── Payment & Business Tool Integrations ───────────────────────────────────────
 export async function listIntegrations() {
   return request('GET', '/api/v1/integrations');
 }
@@ -345,7 +321,6 @@ export function getSlackConnectUrl() {
   return `${BASE}/api/v1/integrations/slack/connect`;
 }
 
-// ── Platform Admin Panel (requires tenant.is_platform_admin) ──────────────────
 export async function getPlatformSettings() {
   return request('GET', '/api/v1/admin/settings');
 }
