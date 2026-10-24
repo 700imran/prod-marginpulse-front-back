@@ -1,12 +1,7 @@
-// Package config centralizes all environment-variable-driven settings,
-// ported from app/core/config.py (pydantic-settings). Every field here
-// matches its Python counterpart 1:1 so DEPLOYMENT.md/.env.example stay
-// valid without changes for anyone who already deployed the Python
-// version — only the loading mechanism changed (env vars only, no .env
-// file parsing at runtime in Lambda; use `godotenv` locally if desired).
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -70,14 +65,9 @@ type Settings struct {
 
 	FieldEncryptionKey string
 
-	// OCRLambdaFunctionName is the RapidOCR Python Lambda's name/ARN,
-	// invoked synchronously via AWS SDK Lambda Invoke (see
-	// internal/pipelines/ocr/ocr.go) — replaces the earlier
-	// tesseract-shelled-out-to-directly approach, which hit real
-	// dnf/al2023 base-image compatibility problems in practice.
 	OCRLambdaFunctionName string
 
-	RustCoreEnabled               bool // always false in Go — see reconciliation package
+	RustCoreEnabled               bool
 	ReconcileConfidenceThreshold  float64
 	ReconcileAutoApproveThreshold float64
 
@@ -91,18 +81,17 @@ type Settings struct {
 
 	SecretRotationDays int
 
-	// OAuth / Sign-in providers
 	GoogleClientID     string
 	GoogleClientSecret string
 	GoogleRedirectURI  string
 
-	AppleClientID    string // Services ID, e.g. "com.marginpulse.web"
+	AppleClientID    string
 	AppleTeamID      string
 	AppleKeyID       string
-	ApplePrivateKey  string // PEM-encoded .p8 private key contents
+	ApplePrivateKey  string
 	AppleRedirectURI string
 
-	FrontendBaseURL string // where to redirect after a successful OAuth login
+	FrontendBaseURL string
 
 	SlackClientID     string
 	SlackClientSecret string
@@ -112,6 +101,17 @@ type Settings struct {
 func getEnv(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func getEnvRequired(key, fallback string) string {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v != "" {
+		return v
+	}
+	if strings.EqualFold(strings.TrimSpace(getEnv("APP_ENV", "development")), "production") {
+		panic(fmt.Sprintf("missing required env var %s for production", key))
 	}
 	return fallback
 }
@@ -152,12 +152,37 @@ func getEnvFloat(key string, fallback float64) float64 {
 	return f
 }
 
+func parseAllowedOrigins(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed == "" {
+			continue
+		}
+		out = append(out, trimmed)
+	}
+	return out
+}
+
 func load() *Settings {
+	appEnv := strings.ToLower(strings.TrimSpace(getEnv("APP_ENV", "development")))
+	allowedOrigins := parseAllowedOrigins(getEnv("ALLOWED_ORIGINS", ""))
+	if appEnv == "production" && len(allowedOrigins) == 0 {
+		panic("production requires ALLOWED_ORIGINS to be set")
+	}
+	if appEnv == "production" && strings.Contains(getEnv("ALLOWED_ORIGINS", ""), "*") {
+		panic("production must not use wildcard CORS origins")
+	}
+
 	return &Settings{
-		AppEnv:         getEnv("APP_ENV", "development"),
-		AppSecretKey:   getEnv("APP_SECRET_KEY", "insecure-dev-key-change-in-production"),
+		AppEnv:         appEnv,
+		AppSecretKey:   getEnvRequired("APP_SECRET_KEY", "insecure-dev-key-change-in-production"),
 		AppDebug:       getEnvBool("APP_DEBUG", false),
-		AllowedOrigins: strings.Split(getEnv("ALLOWED_ORIGINS", "http://localhost:3000"), ","),
+		AllowedOrigins: allowedOrigins,
 
 		DynamoDBTableName:   getEnv("DYNAMODB_TABLE_NAME", "marginpulse"),
 		DynamoDBEndpointURL: getEnv("DYNAMODB_ENDPOINT_URL", ""),
@@ -203,12 +228,12 @@ func load() *Settings {
 		GSTAPIClientSecret: getEnv("GST_API_CLIENT_SECRET", ""),
 		GSTAPIUsername:     getEnv("GST_API_USERNAME", ""),
 
-		JWTSecretKey:                getEnv("JWT_SECRET_KEY", "insecure-jwt-dev-key-change-in-production"),
+		JWTSecretKey:                getEnvRequired("JWT_SECRET_KEY", "insecure-jwt-dev-key-change-in-production"),
 		JWTAlgorithm:                getEnv("JWT_ALGORITHM", "HS256"),
 		JWTAccessTokenExpireMinutes: getEnvInt("JWT_ACCESS_TOKEN_EXPIRE_MINUTES", 60),
 		JWTRefreshTokenExpireDays:   getEnvInt("JWT_REFRESH_TOKEN_EXPIRE_DAYS", 30),
 
-		FieldEncryptionKey: getEnv("FIELD_ENCRYPTION_KEY", "insecure-field-encryption-key-change-in-production"),
+		FieldEncryptionKey: getEnvRequired("FIELD_ENCRYPTION_KEY", "insecure-field-encryption-key-change-in-production"),
 
 		OCRLambdaFunctionName: getEnv("OCR_LAMBDA_FUNCTION_NAME", "marginpulse-ocr-service"),
 
@@ -249,8 +274,6 @@ var (
 	instance *Settings
 )
 
-// Get returns the cached settings singleton — mirrors Python's
-// @lru_cache()-decorated get_settings().
 func Get() *Settings {
 	once.Do(func() {
 		instance = load()
