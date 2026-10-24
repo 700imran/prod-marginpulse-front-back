@@ -118,6 +118,10 @@ export async function runSmoke(opts) {
     const { res } = await call("POST", `${base}/webhook/razorpay`, { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "payment.captured", payload: { payment: { entity: { id: "pay_x", order_id: "order_x", amount: 100, currency: "INR", status: "captured" } } } }) });
     expect(res.status === 401 || res.status === 501, `HTTP ${res.status} — an unsigned payment notification must never be accepted`);
   });
+  await check("payments: the alias /api/razorpay/webhook also rejects an unsigned request", async () => {
+    const { res } = await call("POST", `${base}/api/razorpay/webhook`, { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: "payment.captured", payload: {} }) });
+    expect(res.status === 401 || res.status === 501, `HTTP ${res.status} — the alias must be exactly as strict as /webhook/razorpay`);
+  });
   await check("auth: a garbage bearer token is rejected (401)", async () => {
     const { res } = await call("GET", probe, { headers: { Authorization: "Bearer not.a.real.token" } });
     expect(res.status === 401, `HTTP ${res.status} (expected 401)`);

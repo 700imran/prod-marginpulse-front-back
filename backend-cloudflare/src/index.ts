@@ -18,8 +18,8 @@ import { commsRoutes } from "./routes/comms";
 import { roiRoutes } from "./routes/roi";
 import { adminRoutes } from "./routes/admin";
 import { integrationRoutes } from "./routes/integrations";
-import { webhookRoutes } from "./routes/webhooks";
 import { billingRoutes } from "./routes/billing";
+import { webhookRoutes, handleRazorpayWebhook } from "./routes/webhooks";
 import { assistantRoutes } from "./routes/assistant";
 import { auditLogRoutes } from "./routes/auditLog";
 import { handleQueueBatch } from "./queue/consumer";
@@ -56,6 +56,9 @@ app.route("/api/v1/billing", billingRoutes);
 app.route("/api/v1/assistant", assistantRoutes);
 app.route("/api/v1/audit-log", auditLogRoutes);
 app.route("/webhook", webhookRoutes); // unauthenticated — see routes/webhooks.ts
+// Same handler, second address: an earlier commit published /api/razorpay/webhook, so that is likely what
+// Razorpay's dashboard points at. One implementation serves both (signature-verified, idempotent).
+app.post("/api/razorpay/webhook", handleRazorpayWebhook);
 
 app.notFound((c) => apiError(c, 404, "NOT_FOUND", "not found"));
 

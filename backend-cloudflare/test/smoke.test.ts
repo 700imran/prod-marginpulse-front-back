@@ -86,7 +86,7 @@ function fakeBackend(over: Partial<Record<string, (u: URL, init: any) => Respons
     if (init.method === "OPTIONS") return new Response(null, { status: 204, headers: { ...cors, ...sec } });
     if (u.pathname === "/healthz") return Response.json({ status: "ok", checks: { database: { ok: true }, schema: { ok: true }, rls: { ok: true }, redis: { ok: true } } }, { headers: sec });
     if (u.pathname === "/api/v1/roi") return Response.json({ ok: 1 }, { status: 400 });
-    if (u.pathname === "/webhook/razorpay") return Response.json({ error: { code: "UNAUTHENTICATED" } }, { status: 401 });
+    if (u.pathname === "/webhook/razorpay" || u.pathname === "/api/razorpay/webhook") return Response.json({ error: { code: "UNAUTHENTICATED" } }, { status: 401 });
     if (u.pathname.startsWith("/api/v1/definitely")) return Response.json({ error: { code: "NOT_FOUND" } }, { status: 404 });
     return Response.json({ error: { code: "UNAUTHORIZED", message: "x" } }, { status: 401, headers: sec });
   };

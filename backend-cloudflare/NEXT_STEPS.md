@@ -332,7 +332,7 @@ a task list, not just prose:
 
 - [ ] **URGENT — payments taken by the old Billing page.** See STATUS.md →
       "Plans, locked features and payments". Check Razorpay for captured payments
-      since Oct 22 15:06 and make those customers whole.
+      since Oct 23 08:24 IST and make those customers whole.
 - [ ] Run `db/schema.sql` on Supabase (safe to re-run), add `RAZORPAY_WEBHOOK_SECRET`,
       add the Razorpay webhook, then deploy — exact steps in STATUS.md.
 - [ ] After payments are verified end to end with a real ₹ test payment: set

@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { Env } from "../config";
 import type { Sql } from "../db";
 import { getTenantByWhatsAppPhone, getTenantByIngestEmailAlias } from "../repository/tenants";
@@ -177,7 +177,7 @@ function base64ToArrayBuffer(b64: string): ArrayBuffer {
 // unsigned or wrongly-signed requests are rejected before the body is even parsed.
 // Activation is idempotent (repository/payments.ts), so Razorpay's retries and the
 // browser-side /billing/verify path can't double-apply.
-webhookRoutes.post("/razorpay", async (c) => {
+export async function handleRazorpayWebhook(c: Context<{ Bindings: Env; Variables: { sql: Sql } }>) {
   if (!paymentsConfigured(c.env)) return apiError(c, 501, "NOT_IMPLEMENTED", "payments are not enabled");
   const rawBody = await c.req.text();
   if (!(await verifyWebhookSignature(c.env.RAZORPAY_WEBHOOK_SECRET!, rawBody, c.req.header("X-Razorpay-Signature")))) {
@@ -208,4 +208,5 @@ webhookRoutes.post("/razorpay", async (c) => {
   } finally {
     await setPrivilegedContext(sql, { system: false });
   }
-});
+}
+webhookRoutes.post("/razorpay", handleRazorpayWebhook);

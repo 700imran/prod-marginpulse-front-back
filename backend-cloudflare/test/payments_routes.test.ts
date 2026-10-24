@@ -24,7 +24,7 @@ vi.mock("../src/repository/documents", () => ({ createDocument: vi.fn() }));
 vi.mock("../src/storage", () => ({ uploadBytes: vi.fn() }));
 
 import { billingRoutes } from "../src/routes/billing";
-import { webhookRoutes } from "../src/routes/webhooks";
+import { webhookRoutes, handleRazorpayWebhook } from "../src/routes/webhooks";
 
 const SECRET = "key_secret", WHSEC = "wh_secret";
 const ENV = (over: Record<string, string> = {}) => ({
@@ -32,7 +32,7 @@ const ENV = (over: Record<string, string> = {}) => ({
   PLAN_PRICES_INR: '{"STARTER":999,"GROWTH":2499}', ...over,
 });
 const ctx: any = { waitUntil() {}, passThroughOnException() {} };
-const app = () => { const a = new Hono<any>(); a.use("*", async (c, n) => { c.set("sql", {}); await n(); }); a.route("/billing", billingRoutes); a.route("/webhook", webhookRoutes); return a; };
+const app = () => { const a = new Hono<any>(); a.use("*", async (c, n) => { c.set("sql", {}); await n(); }); a.route("/billing", billingRoutes); a.route("/webhook", webhookRoutes); a.post("/api/razorpay/webhook", handleRazorpayWebhook); return a; };
 const post = (path: string, body: unknown, env = ENV(), headers: Record<string, string> = {}) =>
   app().request(path, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: typeof body === "string" ? body : JSON.stringify(body) }, env, ctx);
 const json = async (r: Response) => (await r.json()) as any;
@@ -200,5 +200,23 @@ describe("POST /webhook/razorpay", () => {
     h.activate.mockRejectedValue(new Error("db down"));
     await send(event()).catch(() => {});
     expect(h.setPriv.mock.calls.at(-1)![1]).toEqual({ system: false });
+  });
+});
+
+describe("the /api/razorpay/webhook alias (the address an earlier commit published)", () => {
+  const body = JSON.stringify({ event: "payment.captured", payload: { payment: { entity: { id: "pay_OK1234", order_id: "order_NEW123", amount: 99900, currency: "INR", status: "captured" } } } });
+  const send = (sig: string | null, path = "/api/razorpay/webhook") => post(path, body, ENV(), sig === null ? {} : { "X-Razorpay-Signature": sig });
+  it("is exactly as strict as /webhook/razorpay: bad signatures 401, nothing touched", async () => {
+    for (const sig of [null, "", "dead", sign("wrong", body), Buffer.from(sign(WHSEC, body), "hex").toString("base64")]) expect((await send(sig)).status).toBe(401);
+    expect(h.activate).not.toHaveBeenCalled();
+  });
+  it("a HEX signature (what Razorpay really sends) activates; the old base64 form is NOT accepted", async () => {
+    expect((await send(sign(WHSEC, body))).status).toBe(200);
+    expect(h.activate).toHaveBeenCalledTimes(1);
+  });
+  it("both addresses do the same thing", async () => {
+    await send(sign(WHSEC, body), "/webhook/razorpay");
+    await send(sign(WHSEC, body), "/api/razorpay/webhook");
+    expect(h.activate.mock.calls[0]).toEqual(h.activate.mock.calls[1]);
   });
 });

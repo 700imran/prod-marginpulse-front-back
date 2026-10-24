@@ -721,19 +721,24 @@ changes (schema.sql is additive/idempotent, so none are needed).
 
 ## Plans, locked features and payments (new) — and a problem found on `main`
 
-**Found on `main` (commits e650640, c1234a4, 0e000f0, Oct 22) — already auto-deployed
-to production at 16:44 that day.** The Razorpay billing routes could not work and
-were unsafe: (1) `verify-payment` compared a *base64* HMAC against Razorpay's *hex*
+**Found on `main` (commits e650640, c1234a4, 0e000f0, 5847387) — reachable in
+production since the Oct 23 02:54 UTC (08:24 IST) deploy of 5847387, which was the
+first to mount them (earlier pushes added the route file but never registered it).**
+The Razorpay billing routes and the inline `/api/razorpay/webhook` could not work
+and were unsafe: (1) `verify-payment` compared a *base64* HMAC against Razorpay's *hex*
 signature, so every real payment failed verification; (2) `create-order` took the
 price from the browser; (3) a verified payment only logged a line — no plan change,
-no credits, no order record; (4) plain `!==` signature comparison; no webhook.
+no credits, no order record; (4) plain `!==` signature comparison; the inline webhook repeated the base64 bug (so
+every genuine Razorpay call got 400) and only logged.
 **Anyone who paid through that Billing page since then was charged and received
-nothing.** Check Razorpay → Payments for captured payments from Oct 22 onward and
+nothing.** Check Razorpay → Payments for captured payments since Oct 23 08:24 IST and
 either refund them or apply the plan by hand (`update tenants set plan_tier=…,
 plan_expires_at=…`).
 
 **What replaced it** (merged into this branch; `main`'s two routes now answer 410
-"refresh the page" so a stale page can't take money):
+"refresh the page" so a stale page can't take money; `/api/razorpay/webhook` is kept as an
+alias of the secure `/webhook/razorpay` handler, so whichever URL Razorpay is
+configured with works):
 - `backend-cloudflare/src/billing/plans.ts` — plans and which feature needs which
   plan, one table served to the app by `GET /billing/plans`. Names/prices come from
   your Billing page: Starter ₹499, Pro ₹1499, Enterprise ₹4999 (database tiers
@@ -767,7 +772,8 @@ plan_expires_at=…`).
 2. Cloudflare → the Worker → Settings → add secret `RAZORPAY_WEBHOOK_SECRET`
    (`RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` already exist from the earlier work).
 3. Razorpay dashboard → Settings → Webhooks → add
-   `https://api.marginpulse.in/webhook/razorpay`, events `payment.captured` and
+   `https://api.marginpulse.in/webhook/razorpay` (the older `/api/razorpay/webhook`
+   address also works), events `payment.captured` and
    `order.paid`, with that same secret. Keep **auto-capture on** (plans only activate
    on captured payments).
 4. Deploy (Actions → "Deploy Cloudflare Worker" → Run workflow, mode `deploy`).
