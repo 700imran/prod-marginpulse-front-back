@@ -8,7 +8,18 @@
 import { useState } from "react";
 import { tokenManager } from "../security/tokenManager";
 
-const API_BASE = "https://api.marginpulse.in";
+export function resolveApiBaseUrl() {
+  const envValue = (typeof process !== "undefined" && process.env && process.env.REACT_APP_API_URL) || "";
+  if (envValue) return envValue.replace(/\/+$/, "");
+
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return window.location.origin.replace(/\/+$/, "");
+  }
+
+  return "";
+}
+
+const API_BASE = resolveApiBaseUrl();
 const PLAN_OPTIONS = [
   { id: "starter", label: "Starter", price: 499, description: "For solo practitioners" },
   { id: "pro", label: "Pro", price: 1499, description: "Best for growing teams" },
@@ -62,7 +73,12 @@ export async function startPayment(amount) {
   try {
     await loadRazorpayScript();
 
-    const orderRes = await fetch(`${API_BASE}/api/v1/billing/create-order`, {
+    const base = resolveApiBaseUrl();
+    if (!base) {
+      throw new Error("API base URL is not configured. Set REACT_APP_API_URL or deploy the app on the same origin as the API.");
+    }
+
+    const orderRes = await fetch(`${base}/api/v1/billing/create-order`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -86,7 +102,7 @@ export async function startPayment(amount) {
       name: "MarginPulse",
       description: "Subscription Payment",
       handler: async function (response) {
-        const verifyRes = await fetch(`${API_BASE}/api/v1/billing/verify-payment`, {
+        const verifyRes = await fetch(`${base}/api/v1/billing/verify-payment`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -193,8 +209,9 @@ export default function BillingView({ tenant }) {
       </button>
 
       <p style={{ fontSize: 12, color: "var(--text-gray)", marginTop: 14 }}>
-        Payment is processed through Razorpay via the MarginPulse billing API at <strong>https://api.marginpulse.in</strong>.
+        Payment is processed through Razorpay via the MarginPulse billing API at <strong>{resolveApiBaseUrl() || "the configured API host"}</strong>.
       </p>
     </div>
   );
 }
+
