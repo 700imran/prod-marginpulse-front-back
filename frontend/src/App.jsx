@@ -1,4 +1,3 @@
-
 /**
  * App.jsx — Main application shell. Neomorphism theme (matching the
  * user-provided mockup), with every nav item wired to real data and a
@@ -38,6 +37,8 @@ function AppShell() {
   const [activeNav, setActiveNav] = useState("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [tenant, setTenant] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [toast, setToast] = useState({ message: "", type: "" });
   const dropdownRef = useRef(null);
@@ -48,7 +49,26 @@ function AppShell() {
   }, []);
 
   useEffect(() => {
-    getProfile().then((data) => { if (data?.tenantId) setTenant(data); });
+    let active = true;
+    setProfileLoading(true);
+    getProfile()
+      .then((data) => {
+        if (!active) return;
+        const nextProfile = data ?? null;
+        setProfile(nextProfile);
+        setTenant(nextProfile);
+        setProfileLoading(false);
+      })
+      .catch(() => {
+        if (!active) return;
+        setProfile(null);
+        setTenant(null);
+        setProfileLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   // Close the profile dropdown on outside click.
@@ -74,7 +94,18 @@ function AppShell() {
       case "dashboard": return <DashboardView onToast={showToast} tenant={tenant} onNavigate={setActiveNav} />;
       case "documents": return <DocumentsView onToast={showToast} />;
       case "gst": return <GSTSyncView onToast={showToast} />;
-      case "profile": return <ProfileView onToast={showToast} onProfileUpdated={setTenant} />;
+      case "profile":
+        return (
+          <ProfileView
+            profile={profile}
+            profileLoading={profileLoading}
+            onToast={showToast}
+            onProfileUpdated={(updated) => {
+              setProfile(updated ?? profile);
+              setTenant(updated ?? tenant);
+            }}
+          />
+        );
       case "taxbank": return <TaxBankView onToast={showToast} />;
       case "recon": return <ReconciliationRulesView onToast={showToast} />;
       case "api": return <IntegrationsView onToast={showToast} />;
