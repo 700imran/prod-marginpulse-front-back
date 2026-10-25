@@ -17,11 +17,8 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "deploy": "npm run build && wrangler deploy",
-    "preview": "npm run build && wrangler dev"
-  },
-  "devDependencies": {
-    "wrangler": "^4.152.0"
+    "deploy": "npm run build && npx wrangler deploy --assets=./build",
+    "preview": "npm run build && npx wrangler dev --assets=./build"
   },
   "browserslist": {
     "production": [
