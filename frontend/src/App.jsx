@@ -1,3 +1,4 @@
+
 /**
  * App.jsx — Main application shell. Neomorphism theme (matching the
  * user-provided mockup), with every nav item wired to real data and a
@@ -180,7 +181,7 @@ function AppShell() {
             </div>
           </div>
 
-          <div className="fade-in" key={activeNav}>
+          <div className="fade-in">
             <Suspense fallback={<div className="view-loading">Loading…</div>}>
               {renderContent()}
             </Suspense>
