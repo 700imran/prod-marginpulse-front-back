@@ -209,6 +209,14 @@ jobs:
       - name: What does the edge say? (raw status + redirect target)
         run: |
           curl -sS -o /dev/null -m 20 -w 'GET /healthz -> HTTP %{http_code}  redirect=%{redirect_url}\n' "${{ steps.url.outputs.url }}/healthz" | tee /dev/stderr | sed 's/^/::notice title=raw healthz::/'
+      # Public information only (algorithm names): how does Supabase sign login tokens?
+      # The Worker accepts only RS256/ES256 via this key list; an EMPTY list means the project
+      # still uses the legacy shared secret, and then every logged-in request would be rejected.
+      - name: Which algorithm does Supabase sign login tokens with?
+        run: |
+          ref_url="$(grep -E '^SUPABASE_URL\s*=' wrangler.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          out="$(curl -sS -m 20 "$ref_url/auth/v1/.well-known/jwks.json" | jq -c '{keys_published: (.keys | length), algorithms: [.keys[].alg], key_types: [.keys[].kty]}' 2>&1 || true)"
+          echo "::notice title=Supabase token-signing keys (JWKS)::$out"
       - name: Smoke test (live)
         env:
           BACKEND_URL: ${{ steps.url.outputs.url }}
@@ -217,7 +225,8 @@ jobs:
 
   # Read-only: how the deployed Workers are wired in Cloudflare (domains, secret names).
   inspect:
-    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'inspect'
+    # Prints infrastructure names into the run page, so it refuses to run in a public repository.
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'inspect' && github.event.repository.private
     runs-on: ubuntu-latest
     defaults:
       run:

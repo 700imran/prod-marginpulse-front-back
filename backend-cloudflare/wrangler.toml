@@ -167,3 +167,10 @@ PLAN_PRICES_INR = '{"STARTER":499,"GROWTH":1499,"ENTERPRISE":4999}'
 # on FREE: turning it on locks them all out of GST sync, audit trail, team, etc. Flip
 # it only once payments are confirmed working end to end (see STATUS.md).
 ENFORCE_PLAN_GATING = "false"
+
+# Keep the Worker's console output (errors, request ids) in Cloudflare Workers Logs so a
+# failure can be looked up afterwards (dashboard → Worker → Logs). Without this, logs only
+# exist while someone is running `wrangler tail`.
+[observability]
+enabled = true
+head_sampling_rate = 1
