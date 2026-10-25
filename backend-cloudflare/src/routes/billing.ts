@@ -4,6 +4,26 @@ import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
 
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = 10000,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new Error(`Request timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export const billingRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
 billingRoutes.use("*", requireAuth);
@@ -25,6 +45,14 @@ billingRoutes.get("/usage", async (c) => {
 billingRoutes.post("/create-order", async (c) => {
   const tenant = c.get("tenant");
 
+  if (!c.env.RAZORPAY_KEY_ID || !c.env.RAZORPAY_KEY_SECRET) {
+    console.error("razorpay:missing_credentials", {
+      hasKeyId: !!c.env.RAZORPAY_KEY_ID,
+      hasKeySecret: !!c.env.RAZORPAY_KEY_SECRET,
+    });
+    return c.json({ error: "Razorpay is not configured" }, 500);
+  }
+
   let body;
   try {
     body = await c.req.json();
@@ -43,22 +71,26 @@ billingRoutes.post("/create-order", async (c) => {
   const auth = btoa(`${c.env.RAZORPAY_KEY_ID}:${c.env.RAZORPAY_KEY_SECRET}`);
 
   try {
-    const rzpRes = await fetch("https://api.razorpay.com/v1/orders", {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${auth}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        amount: amount * 100,
-        currency,
-        receipt,
-        notes: {
-          tenantId: tenant.tenantId,
-          planTier: tenant.planTier,
+    const rzpRes = await fetchWithTimeout(
+      "https://api.razorpay.com/v1/orders",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${auth}`,
+          "Content-Type": "application/json",
         },
-      }),
-    });
+        body: JSON.stringify({
+          amount: amount * 100,
+          currency,
+          receipt,
+          notes: {
+            tenantId: tenant.tenantId,
+            planTier: tenant.planTier,
+          },
+        }),
+      },
+      10000,
+    );
 
     const order = await rzpRes.json();
 
@@ -82,13 +114,18 @@ billingRoutes.post("/create-order", async (c) => {
     });
   } catch (e) {
     console.error("razorpay:create_order_exception", e);
-    return c.json({ error: "Failed to create Razorpay order" }, 500);
+    return c.json({ error: e instanceof Error ? e.message : "Failed to create Razorpay order" }, 500);
   }
 });
 
-// ─── Razorpay: Verify Payment ─────────────────────────────
+// ─── Razorpay: Verify Payment ───────���─────────────────────
 billingRoutes.post("/verify-payment", async (c) => {
   const tenant = c.get("tenant");
+
+  if (!c.env.RAZORPAY_KEY_SECRET) {
+    console.error("razorpay:missing_verification_secret");
+    return c.json({ error: "Razorpay is not configured" }, 500);
+  }
 
   let body;
   try {
