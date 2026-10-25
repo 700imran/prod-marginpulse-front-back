@@ -20,9 +20,9 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "deploy = deploy + smoke test (auto-rollback on failure) | preview = upload a NON-live version and smoke-test it | crons = show the cron schedules | smoke-live = read-only smoke test of what is live right now"
+        description: "deploy = deploy + smoke test (auto-rollback on failure) | preview = upload a NON-live version and smoke-test it | crons = show the cron schedules | smoke-live = read-only smoke test of what is live right now | inspect = read-only list of custom domains and which secrets exist"
         type: choice
-        options: [deploy, preview, crons, smoke-live]
+        options: [deploy, preview, crons, smoke-live, inspect]
         default: deploy
       fix_crons:
         description: "crons mode only: reset the schedule to just the daily sweep"
@@ -214,3 +214,17 @@ jobs:
           BACKEND_URL: ${{ steps.url.outputs.url }}
           CORS_ORIGINS: ${{ vars.FRONTEND_URLS || 'https://app.marginpulse.in,https://prod-marginpulse-frontend.imrankhan210r.workers.dev' }}
         run: node scripts/smoke.mjs
+
+  # Read-only: how the deployed Workers are wired in Cloudflare (domains, secret names).
+  inspect:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'inspect'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend-cloudflare
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect Cloudflare wiring (names only, no secret values)
+        run: bash scripts/inspect-cf.sh
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}

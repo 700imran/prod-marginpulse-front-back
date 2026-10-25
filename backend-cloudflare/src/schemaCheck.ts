@@ -13,6 +13,7 @@ export const REQUIRED_TABLES = [
   "tenants", "documents", "anomalies", "audit_log", "tax_identifiers", "bank_accounts", "team_members",
   "credit_wallets", "credit_ledger", "usage_events", // added by the hardening pass (billing)
   "payment_orders", // plan purchases
+  "telemetry_events", "metrics_counters", "issues", "issue_notes", "issue_occurrences", // operations telemetry + issue tracker
 ] as const;
 
 export const REQUIRED_COLUMNS: readonly (readonly [table: string, column: string])[] = [

@@ -400,6 +400,83 @@ create table if not exists public.payment_orders (
 );
 create index if not exists idx_payment_orders_tenant on public.payment_orders (tenant_id, created_at desc);
 
+-- ============================================================================
+-- Telemetry, metrics and the issue tracker (platform operations)
+-- ============================================================================
+
+-- telemetry_events — what users did, one row per event: the raw material for the
+-- admin panel's funnels / stuck-user lists and the Grafana product dashboards.
+-- Event NAMES come from a fixed allowlist (src/telemetry/events.ts) and props are
+-- scrubbed of anything personal before storage. tenant_id is NULL for system events
+-- (visible only to the platform admin / system context by the policy below).
+create table if not exists public.telemetry_events (
+  event_id    uuid primary key default gen_random_uuid(),
+  tenant_id   uuid references public.tenants(tenant_id) on delete cascade,
+  session_id  text,
+  name        text not null,
+  props       jsonb not null default '{}'::jsonb,
+  source      text not null default 'web' check (source in ('web','api','system')),
+  created_at  timestamptz not null default now()
+);
+create index if not exists idx_telemetry_tenant_created on public.telemetry_events (tenant_id, created_at desc);
+create index if not exists idx_telemetry_name_created on public.telemetry_events (name, created_at desc);
+create index if not exists idx_telemetry_created on public.telemetry_events (created_at desc);
+
+-- metrics_counters — request/latency counters aggregated across Worker instances
+-- (each instance buffers in memory and flushes increments here). Read by GET /metrics
+-- for Prometheus. Bounded cardinality: route patterns and status classes, never raw
+-- URLs or ids. No tenant data.
+create table if not exists public.metrics_counters (
+  name        text not null,
+  labels      text not null default '',
+  value       double precision not null default 0,
+  updated_at  timestamptz not null default now(),
+  primary key (name, labels)
+);
+
+-- issues — deduplicated problems (a 500 on a route, a client error, a payment
+-- mismatch) with a status workflow so someone owns and closes each one. A RESOLVED
+-- issue that happens again reopens itself and says so (regression).
+create table if not exists public.issues (
+  issue_id        uuid primary key default gen_random_uuid(),
+  fingerprint     text not null unique,
+  kind            text not null check (kind in ('api_error','client_error','payment','workflow_stuck','other')),
+  severity        text not null default 'medium' check (severity in ('low','medium','high','critical')),
+  status          text not null default 'OPEN' check (status in ('OPEN','ACKNOWLEDGED','RESOLVED','IGNORED')),
+  title           text not null,
+  sample          jsonb not null default '{}'::jsonb,
+  occurrences     integer not null default 1,
+  reopened_count  integer not null default 0,
+  assignee_email  text,
+  resolution      text,
+  resolved_by     text,
+  resolved_at     timestamptz,
+  first_seen      timestamptz not null default now(),
+  last_seen       timestamptz not null default now()
+);
+create index if not exists idx_issues_status_last_seen on public.issues (status, last_seen desc);
+
+create table if not exists public.issue_notes (
+  note_id      uuid primary key default gen_random_uuid(),
+  issue_id     uuid not null references public.issues(issue_id) on delete cascade,
+  author_email text not null,
+  kind         text not null default 'COMMENT' check (kind in ('COMMENT','STATUS','SYSTEM')),
+  body         text not null,
+  created_at   timestamptz not null default now()
+);
+create index if not exists idx_issue_notes_issue on public.issue_notes (issue_id, created_at);
+
+create table if not exists public.issue_occurrences (
+  occurrence_id uuid primary key default gen_random_uuid(),
+  issue_id      uuid not null references public.issues(issue_id) on delete cascade,
+  tenant_id     uuid,
+  request_id    text,
+  path          text,
+  detail        jsonb not null default '{}'::jsonb,
+  created_at    timestamptz not null default now()
+);
+create index if not exists idx_issue_occ_issue on public.issue_occurrences (issue_id, created_at desc);
+
 -- Backfill: one wallet row per tenant that already existed when this
 -- migration (re-)ran, so reserveCredits() never has to special-case a
 -- missing wallet for a pre-existing tenant. New tenants get a wallet
@@ -496,7 +573,7 @@ begin
     'tenants', 'documents', 'bank_transactions', 'tax_identifiers', 'bank_accounts',
     'team_members', 'anomalies', 'audit_log', 'reconciliation_settings',
     'notification_settings', 'integration_settings', 'integrations',
-    'credit_wallets', 'credit_ledger', 'usage_events', 'payment_orders'
+    'credit_wallets', 'credit_ledger', 'usage_events', 'payment_orders', 'telemetry_events'
   ]
   loop
     execute format('alter table public.%I enable row level security', t);
@@ -506,6 +583,23 @@ begin
       'create policy tenant_isolation on public.%I for all using (tenant_id = public.app_current_tenant_id() or public.app_is_privileged()) with check (tenant_id = public.app_current_tenant_id() or public.app_is_privileged())',
       t
     );
+  end loop;
+end
+$$;
+
+-- Platform-operations tables have no tenant owner: only the platform admin (or trusted
+-- system code writing metrics/issues) may touch them. A normal tenant's connection
+-- sees nothing here even if a bug ever tried to query them.
+do $$
+declare
+  t text;
+begin
+  foreach t in array array['metrics_counters', 'issues', 'issue_notes', 'issue_occurrences']
+  loop
+    execute format('alter table public.%I enable row level security', t);
+    execute format('alter table public.%I force row level security', t);
+    execute format('drop policy if exists admin_only on public.%I', t);
+    execute format('create policy admin_only on public.%I for all using (public.app_is_privileged()) with check (public.app_is_privileged())', t);
   end loop;
 end
 $$;
