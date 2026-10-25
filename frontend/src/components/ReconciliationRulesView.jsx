@@ -6,9 +6,22 @@ import { useState, useEffect } from "react";
 import { getReconciliationSettings, updateReconciliationSettings } from "../api";
 import { Toggle } from "../theme";
 
+function toPercent(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return num > 1 ? num : num * 100;
+}
+
+function toDecimal(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return 0;
+  return num > 1 ? num / 100 : num;
+}
+
 export default function ReconciliationRulesView({ onToast }) {
   const [settings, setSettings] = useState(null);
-  const [threshold, setThreshold] = useState(95);
+  const [threshold, setThreshold] = useState(75);
+  const [dateDriftTolerance, setDateDriftTolerance] = useState(3);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -16,7 +29,8 @@ export default function ReconciliationRulesView({ onToast }) {
     getReconciliationSettings().then((data) => {
       if (data) {
         setSettings(data);
-        setThreshold(data.ocrConfidenceThreshold);
+        setThreshold(toPercent(data.ocrConfidenceThreshold ?? 0.75));
+        setDateDriftTolerance(Number(data.dateDriftToleranceDays ?? 3));
       }
       setLoading(false);
     });
@@ -24,9 +38,20 @@ export default function ReconciliationRulesView({ onToast }) {
 
   async function patch(fields) {
     setSaving(true);
-    const updated = await updateReconciliationSettings(fields);
-    if (updated?.ocrConfidenceThreshold !== undefined) {
+
+    const payload = { ...fields };
+    if (Object.prototype.hasOwnProperty.call(payload, "ocrConfidenceThreshold")) {
+      payload.ocrConfidenceThreshold = toDecimal(payload.ocrConfidenceThreshold);
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, "dateDriftToleranceDays")) {
+      payload.dateDriftToleranceDays = Number(payload.dateDriftToleranceDays);
+    }
+
+    const updated = await updateReconciliationSettings(payload);
+    if (updated) {
       setSettings(updated);
+      setThreshold(toPercent(updated.ocrConfidenceThreshold ?? 0.75));
+      setDateDriftTolerance(Number(updated.dateDriftToleranceDays ?? 3));
       onToast?.("Reconciliation rules updated", "success");
     } else {
       onToast?.(updated?.detail || "Could not save", "error");
@@ -35,7 +60,7 @@ export default function ReconciliationRulesView({ onToast }) {
   }
 
   function handleThresholdBlur() {
-    const num = Math.max(0, Math.min(100, parseInt(threshold, 10) || 0));
+    const num = Math.max(0, Math.min(100, Number.parseFloat(threshold) || 0));
     setThreshold(num);
     patch({ ocrConfidenceThreshold: num });
   }
@@ -49,17 +74,27 @@ export default function ReconciliationRulesView({ onToast }) {
         <Toggle
           title="Fuzzy Vendor Matching"
           desc="Allow AI to match variations of names (e.g., 'TechServe' and 'TechServe Pvt Ltd')."
-          checked={settings?.fuzzyVendorMatching}
+          checked={!!settings?.fuzzyVendorMatching}
           onChange={(v) => { setSettings((s) => ({ ...s, fuzzyVendorMatching: v })); patch({ fuzzyVendorMatching: v }); }}
           disabled={saving}
         />
-        <Toggle
-          title="Date Drift Tolerance"
-          desc="Allow matching if bank settlement date is within ±5 days of invoice date."
-          checked={settings?.dateDriftToleranceDays}
-          onChange={(v) => { setSettings((s) => ({ ...s, dateDriftToleranceDays: v })); patch({ dateDriftToleranceDays: v }); }}
-          disabled={saving}
-        />
+
+        <div className="form-group" style={{ marginTop: 24, maxWidth: 300 }}>
+          <label className="form-label">Date Drift Tolerance (days)</label>
+          <input
+            type="number"
+            className="form-control"
+            value={dateDriftTolerance}
+            min={0}
+            max={30}
+            onChange={(e) => setDateDriftTolerance(e.target.value)}
+            onBlur={() => patch({ dateDriftToleranceDays: Number(dateDriftTolerance) })}
+          />
+          <p style={{ fontSize: 12, color: "var(--text-gray)", marginTop: 8 }}>
+            Allow matching if bank statement date is within this many days of the invoice date.
+          </p>
+        </div>
+
         <div className="form-group" style={{ marginTop: 24, maxWidth: 300 }}>
           <label className="form-label">OCR Confidence Threshold (%)</label>
           <input
