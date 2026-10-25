@@ -1,19 +1,31 @@
-/**
- * ProfileView.jsx — "Profile Configurations" page. Real load/save against
- * GET/PATCH /api/v1/auth/me. Replaces the mockup's defaultValue-only inputs.
- */
 import { useState, useEffect } from "react";
 import { getProfile, updateProfile } from "../api";
 
-export default function ProfileView({ onToast, onProfileUpdated }) {
-  const [profile, setProfile] = useState(null);
-  const [form, setForm] = useState({ displayName: "", businessName: "", phoneNumber: "" });
-  const [loading, setLoading] = useState(true);
+export default function ProfileView({ profile: initialProfile, profileLoading, onToast, onProfileUpdated }) {
+  const [profile, setProfile] = useState(initialProfile ?? null);
+  const [form, setForm] = useState({
+    displayName: initialProfile?.displayName || "",
+    businessName: initialProfile?.businessName || "",
+    phoneNumber: initialProfile?.phoneNumber || "",
+  });
+  const [loading, setLoading] = useState(profileLoading || !initialProfile);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
+    if (initialProfile) {
+      setProfile(initialProfile);
+      setForm({
+        displayName: initialProfile.displayName || "",
+        businessName: initialProfile.businessName || "",
+        phoneNumber: initialProfile.phoneNumber || "",
+      });
+      setLoading(false);
+      return;
+    }
+
     let active = true;
+    setLoading(true);
     getProfile().then((data) => {
       if (!active || !data) return;
       setProfile(data);
@@ -23,9 +35,12 @@ export default function ProfileView({ onToast, onProfileUpdated }) {
         phoneNumber: data.phoneNumber || "",
       });
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => {
+      if (active) setLoading(false);
+    });
+
     return () => { active = false; };
-  }, []);
+  }, [initialProfile]);
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
@@ -40,8 +55,8 @@ export default function ProfileView({ onToast, onProfileUpdated }) {
       });
       if (updated?.tenantId) {
         setProfile(updated);
-        onToast?.("Profile saved", "success");
         onProfileUpdated?.(updated);
+        onToast?.("Profile saved", "success");
       } else {
         setError(updated?.detail || "Could not save changes");
       }
