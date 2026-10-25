@@ -8,4 +8,7 @@
   "assets": {
     "directory": "build"
   }
+  {
+  "main": "src/index.ts"
+  }
 }
