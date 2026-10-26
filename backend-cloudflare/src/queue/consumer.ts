@@ -108,11 +108,11 @@ async function runReconciliation(env: Env, sqlIn: ReturnType<typeof getDb> | nul
     }
 
     const docDate = new Date(`${doc.documentDate}T00:00:00Z`);
-    const startDate = new Date(docDate.getTime() - 10 * 86_400_000).toISOString().slice(0, 10);
-    const endDate = new Date(docDate.getTime() + 10 * 86_400_000).toISOString().slice(0, 10);
+    const startDate = new Date(docDate.getTime() - 7 * 86_400_000).toISOString().slice(0, 10);
+    const endDate = new Date(docDate.getTime() + 45 * 86_400_000).toISOString().slice(0, 10);
     const candidates = await listUnmatchedInDateRange(sql, tenantId, startDate, endDate);
 
-    const invoice: Invoice = { documentId: doc.documentId, vendorName: doc.vendorName ?? "", rawTotalAmount: parseFloat(doc.rawTotalAmount), documentDate: doc.documentDate };
+    const invoice: Invoice = { documentId: doc.documentId, invoiceNumber: doc.invoiceNumber ?? undefined, vendorName: doc.vendorName ?? "", rawTotalAmount: parseFloat(doc.rawTotalAmount), documentDate: doc.documentDate };
     const bankRows: BankRow[] = candidates.map((c) => ({ transactionId: c.transactionId, narration: c.narration ?? "", debitAmount: parseFloat(c.debitAmount), transactionDate: c.transactionDate }));
 
     const [result] = reconcileBatch([invoice], bankRows);

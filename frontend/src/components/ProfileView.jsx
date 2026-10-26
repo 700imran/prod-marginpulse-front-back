@@ -8,7 +8,7 @@ export default function ProfileView({ profile: initialProfile, profileLoading, o
     businessName: initialProfile?.businessName || "",
     phoneNumber: initialProfile?.phoneNumber || "",
   });
-  const [loading, setLoading] = useState(profileLoading || !initialProfile);
+  const [loading, setLoading] = useState(!initialProfile && profileLoading);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
@@ -24,10 +24,11 @@ export default function ProfileView({ profile: initialProfile, profileLoading, o
       return;
     }
 
+    if (profileLoading) return; // AppShell fetch still in flight — it will hand us the profile
     let active = true;
     setLoading(true);
     getProfile().then((data) => {
-      if (!active || !data) return;
+      if (!active || !data?.tenantId) return;
       setProfile(data);
       setForm({
         displayName: data.displayName || "",
@@ -35,12 +36,12 @@ export default function ProfileView({ profile: initialProfile, profileLoading, o
         phoneNumber: data.phoneNumber || "",
       });
       setLoading(false);
-    }).catch(() => {
-      if (active) setLoading(false);
+    }).catch(() => {}).finally(() => {
+      if (active) setLoading(false); // never leave the spinner stuck on error/empty responses
     });
 
     return () => { active = false; };
-  }, [initialProfile]);
+  }, [initialProfile, profileLoading]);
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 

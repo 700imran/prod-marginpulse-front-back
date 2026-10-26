@@ -37,8 +37,11 @@ function AppShell() {
   const [activeNav, setActiveNav] = useState("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [tenant, setTenant] = useState(null);
-  const [profile, setProfile] = useState(null);
-  const [profileLoading, setProfileLoading] = useState(true);
+  // Stale-while-revalidate: paint instantly from the last known profile,
+  // refresh in the background, and only show a loading state on the very first visit.
+  const cachedProfile = (() => { try { return JSON.parse(sessionStorage.getItem("mp_profile") || "null"); } catch { return null; } })();
+  const [profile, setProfile] = useState(cachedProfile);
+  const [profileLoading, setProfileLoading] = useState(!cachedProfile);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [toast, setToast] = useState({ message: "", type: "" });
   const dropdownRef = useRef(null);
@@ -50,20 +53,20 @@ function AppShell() {
 
   useEffect(() => {
     let active = true;
-    setProfileLoading(true);
+    if (cachedProfile) setTenant(cachedProfile);
     getProfile()
       .then((data) => {
         if (!active) return;
-        const nextProfile = data ?? null;
-        setProfile(nextProfile);
-        setTenant(nextProfile);
+        // Ignore error payloads ({error: ...}) — keep whatever we already have.
+        if (data?.tenantId) {
+          setProfile(data);
+          setTenant(data);
+          try { sessionStorage.setItem("mp_profile", JSON.stringify(data)); } catch { /* storage unavailable */ }
+        }
         setProfileLoading(false);
       })
       .catch(() => {
-        if (!active) return;
-        setProfile(null);
-        setTenant(null);
-        setProfileLoading(false);
+        if (active) setProfileLoading(false);
       });
 
     return () => {

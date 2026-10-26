@@ -9,10 +9,11 @@
  * presence) rather than a fixed "have you clicked this before" flag, so
  * it always reflects actual account state even across devices/browsers.
  */
+import { ACCEPT_ATTR, fileKind } from "../ingest/parseFile";
 import { useState, useEffect } from "react";
 import { StatusDonut, RiskBarChart } from "./charts";
 import {
-  getDashboard, listAnomalies, resolveAnomaly, uploadDocument, triggerReconciliation,
+  getDashboard, listAnomalies, resolveAnomaly, uploadDocument, uploadDataset, triggerReconciliation,
   listBankAccounts, listTaxIdentifiers, getDashboardInsights, downloadReconciliationReport,
   detectMissingInvoices,
 } from "../api";
@@ -248,22 +249,36 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
   async function handleFileUpload(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    setUploading(true);
-    const result = await uploadDocument(file, "INVOICE");
-    setUploading(false);
+    const kind = fileKind(file);
     e.target.value = "";
-    // The Cloudflare backend returns the created document row directly
-    // (documentId) — OCR already ran client-side and finished before
-    // this response came back, so there's no async "queued" state to
-    // wait out anymore, unlike the old tracking_job_id flow.
-    if (result?.documentId) {
-      const message = result.ocrConfidenceScore != null
-        ? "Document uploaded and processed"
-        : "Document uploaded — no text detected, fill in details manually";
-      onToast?.(message, "success");
-      refresh();
-    } else {
-      onToast?.(result?.error || result?.detail || "Upload failed", "error");
+    if (kind === "legacy-xls") { onToast?.("Old .xls files aren't supported — open it in Excel and Save As .xlsx or .csv", "error"); return; }
+    if (kind === "unsupported") { onToast?.("Unsupported file type. Use PDF, image, XLSX, CSV, TSV, JSON, XML or TXT", "error"); return; }
+    setUploading(true);
+    try {
+      if (kind === "data") {
+        const r = await uploadDataset(file);
+        if (r?.rowsImported != null) {
+          const label = r.datasetType === "BANK_STATEMENT" ? "bank transactions" : "invoices";
+          const rc = r.reconciliation || {};
+          onToast?.(`Imported ${r.rowsImported} ${label} — ${rc.reconciled ?? 0} reconciled, ${rc.review ?? 0} need review${r.warnings?.length ? ` (${r.warnings[0]})` : ""}`, "success");
+          refresh();
+        } else {
+          onToast?.(r?.error || "Could not import this file", "error");
+        }
+        return;
+      }
+      const result = await uploadDocument(file, "INVOICE");
+      // OCR already ran client-side before this response came back, so there's no async "queued" state.
+      if (result?.documentId) {
+        onToast?.(result.ocrConfidenceScore != null ? "Document uploaded and processed" : "Document uploaded — no text detected, fill in details manually", "success");
+        refresh();
+      } else {
+        onToast?.(result?.error || result?.detail || "Upload failed", "error");
+      }
+    } catch (err) {
+      onToast?.("Upload failed — please try again", "error");
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -420,7 +435,7 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
             )}
             <label className="btn btn-ghost" style={{ cursor: uploading ? "not-allowed" : "pointer" }}>
               {uploading ? "Uploading…" : "+ Upload Document"}
-              <input type="file" accept=".pdf,.png,.jpg,.jpeg,.csv" onChange={handleFileUpload} disabled={uploading} style={{ display: "none" }} />
+              <input type="file" accept={ACCEPT_ATTR} onChange={handleFileUpload} disabled={uploading} style={{ display: "none" }} />
             </label>
             <button className="btn btn-primary" onClick={handleRunReconciliation}>Run Reconciliation</button>
           </div>

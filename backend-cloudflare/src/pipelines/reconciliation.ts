@@ -98,6 +98,7 @@ export interface Invoice {
   vendorName: string;
   rawTotalAmount: number;
   documentDate: string; // ISO YYYY-MM-DD
+  invoiceNumber?: string;
 }
 export interface BankRow {
   transactionId: string;
@@ -113,7 +114,7 @@ export interface MatchResult {
   reason: string;
 }
 
-export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresholds: ReconcileThresholds = DEFAULT_THRESHOLDS): MatchResult[] {
+export function reconcileBatchLegacy(invoices: Invoice[], bankRows: BankRow[], thresholds: ReconcileThresholds = DEFAULT_THRESHOLDS): MatchResult[] {
   const results: MatchResult[] = [];
 
   for (const inv of invoices) {
@@ -160,4 +161,142 @@ export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresho
     });
   }
   return results;
+}
+
+
+// ════════════════════════════════════════════════════════════════════════
+// v2 engine — gated, one-to-one, token-aware.
+//
+// Why the legacy scorer was replaced (measured in reconciliation.bench.test.ts):
+//  1. Amount was a soft term, so a perfect name + date match with a 5%
+//     wrong amount still scored 0.98 and auto-approved.
+//  2. Whole-string Levenshtein of "ACME TRADERS" against
+//     "NEFT-HDFC0001-ACME TRADERS PVT LTD-REF88213" is dominated by bank
+//     noise, so true matches scored low and wrong ones high.
+//  3. Invoices were scored independently, so one bank debit could be
+//     "matched" to several invoices.
+// ════════════════════════════════════════════════════════════════════════
+
+const NOISE = new Set(["neft", "rtgs", "imps", "upi", "ach", "ecs", "nach", "cr", "dr", "by", "to", "from", "ref", "refno", "txn", "payment", "pmt", "pay", "transfer", "trf", "tpt", "inb", "mob", "bank", "ltd", "limited", "pvt", "private", "llp", "inc", "co", "company", "corp", "the", "and", "of", "sbin", "hdfc", "icic", "utib", "kkbk", "yesb", "pytm", "ybl", "okaxis", "oksbi", "okhdfcbank", "paytm"]);
+
+export function tokens(s: string): string[] {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ")
+    .filter((t) => t.length > 1 && !NOISE.has(t) && !/^\d{6,}$/.test(t) && !/^[a-z]{4}0\w{6}$/.test(t));
+}
+
+// Share of the vendor's tokens that appear (exactly or with a small typo /
+// truncation) in the bank narration. Containment, not whole-string distance.
+export function vendorSimilarity(vendor: string, narration: string): number {
+  const vt = tokens(vendor);
+  const nt = tokens(narration);
+  if (vt.length === 0 || nt.length === 0) return 0;
+  let hit = 0;
+  for (const v of vt) {
+    let best = 0;
+    for (const n of nt) {
+      if (n === v) { best = 1; break; }
+      if (v.length >= 4 && (n.startsWith(v) || v.startsWith(n)) && Math.min(n.length, v.length) >= 4) best = Math.max(best, 0.9);
+      else best = Math.max(best, levenshteinRatio(v, n) >= 0.8 ? 0.8 : 0);
+    }
+    hit += best;
+  }
+  return hit / vt.length;
+}
+
+function referenceHit(invoiceNumber: string | undefined, narration: string): boolean {
+  if (!invoiceNumber) return false;
+  const k = invoiceNumber.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (k.length < 3) return false;
+  return narration.toLowerCase().replace(/[^a-z0-9]/g, "").includes(k);
+}
+
+export interface EngineOptions {
+  amountTolerancePct: number; // exact tier (auto-approvable), e.g. 0.0002 = 0.02%
+  nearTolerancePct: number; // near tier (review only), e.g. 0.005 = 0.5%
+  amountToleranceAbs: number; // rupees, whichever is larger
+  tdsRates: number[]; // net-of-TDS payment tiers
+  daysBefore: number; // payment before invoice date
+  daysAfter: number; // payment after invoice date
+}
+export const DEFAULT_ENGINE: EngineOptions = { amountTolerancePct: 0.0002, nearTolerancePct: 0.005, amountToleranceAbs: 1, tdsRates: [0.01, 0.02, 0.05, 0.1], daysBefore: 7, daysAfter: 45 };
+
+type Tier = "EXACT" | "NEAR" | "NET_OF_TDS";
+interface Candidate { inv: number; bank: number; score: number; tier: Tier; vendor: number; ref: boolean; days: number }
+
+function amountTier(inv: number, bank: number, o: EngineOptions): Tier | null {
+  const tol = Math.max(o.amountToleranceAbs, inv * o.amountTolerancePct);
+  if (Math.abs(inv - bank) <= tol) return "EXACT";
+  if (Math.abs(inv - bank) <= Math.max(o.amountToleranceAbs, inv * o.nearTolerancePct)) return "NEAR";
+  for (const r of o.tdsRates) if (Math.abs(inv * (1 - r) - bank) <= Math.max(o.amountToleranceAbs, inv * 0.003)) return "NET_OF_TDS";
+  return null;
+}
+
+export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresholds: ReconcileThresholds = DEFAULT_THRESHOLDS, opts: EngineOptions = DEFAULT_ENGINE): MatchResult[] {
+  const cands: Candidate[] = [];
+  const perInv: Candidate[][] = invoices.map(() => []);
+  const perBank = new Map<number, Candidate[]>();
+
+  // Index bank debits by amount so each invoice only inspects rows that can pass
+  // the amount gate (keeps 5k x 5k batches fast); dates parsed once, not per pair.
+  const bankMs = bankRows.map((b) => (b.transactionDate ? Date.parse(b.transactionDate + "T00:00:00Z") : NaN));
+  const order = bankRows.map((_, j) => j).filter((j) => bankRows[j]!.debitAmount > 0 && !Number.isNaN(bankMs[j]!)).sort((a, b) => bankRows[a]!.debitAmount - bankRows[b]!.debitAmount);
+  const lowerBound = (v: number) => { let lo = 0, hi = order.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (bankRows[order[mid]!]!.debitAmount < v) lo = mid + 1; else hi = mid; } return lo; };
+  const maxTds = Math.max(0, ...opts.tdsRates);
+
+  invoices.forEach((inv, i) => {
+    if (!inv.documentDate || !(inv.rawTotalAmount > 0)) return;
+    const invMs = Date.parse(inv.documentDate + "T00:00:00Z");
+    if (Number.isNaN(invMs)) return;
+    const loAmt = inv.rawTotalAmount * (1 - maxTds - 0.005) - 1;
+    const hiAmt = inv.rawTotalAmount * 1.005 + 1;
+    for (let k = lowerBound(loAmt); k < order.length; k++) {
+      const j = order[k]!;
+      const b = bankRows[j]!;
+      if (b.debitAmount > hiAmt) break;
+      const signed = (bankMs[j]! - invMs) / 86_400_000;
+      if (signed < -opts.daysBefore || signed > opts.daysAfter) continue;
+      const tier = amountTier(inv.rawTotalAmount, b.debitAmount, opts);
+      if (!tier) continue; // HARD amount gate — wrong amount can never match
+      const vendor = vendorSimilarity(inv.vendorName, b.narration);
+      const ref = referenceHit(inv.invoiceNumber, b.narration);
+      const dateScore = Math.exp(-0.03 * Math.abs(signed));
+      let score = 0.3 + 0.4 * vendor + 0.15 * dateScore + (ref ? 0.15 : 0);
+      if (tier !== "EXACT") score -= 0.1;
+      const c: Candidate = { inv: i, bank: j, score: roundTo6(Math.min(score, 1)), tier, vendor, ref, days: Math.abs(signed) };
+      cands.push(c);
+      perInv[i]!.push(c);
+      (perBank.get(j) ?? perBank.set(j, []).get(j)!).push(c);
+    }
+  });
+
+  // One-to-one: strongest pairs claim their bank row first.
+  cands.sort((a, b) => b.score - a.score || a.days - b.days);
+  const usedBank = new Set<number>();
+  const assigned = new Map<number, Candidate>();
+  for (const c of cands) {
+    if (assigned.has(c.inv) || usedBank.has(c.bank)) continue;
+    assigned.set(c.inv, c);
+    usedBank.add(c.bank);
+  }
+
+  return invoices.map((inv, i): MatchResult => {
+    if (!inv.documentDate || !(inv.rawTotalAmount > 0)) {
+      return { documentId: inv.documentId, matchedBankTransactionId: null, score: 0, status: "FAILED", reason: "Missing amount or date for matching" };
+    }
+    const c = assigned.get(i);
+    if (!c) {
+      return { documentId: inv.documentId, matchedBankTransactionId: null, score: 0, status: "UNMATCHED", reason: "No bank debit with a matching amount inside the payment window (or it was claimed by a stronger match)" };
+    }
+    const bank = bankRows[c.bank]!;
+    const pct = `${(c.score * 100).toFixed(0)}%`;
+    // Ambiguity: another bank row fits this invoice about as well, or another invoice competes for this bank row.
+    // An invoice-number hit in the narration is decisive and clears it.
+    const rivals = c.ref ? 0 : perInv[i]!.filter((x) => x !== c && c.score - x.score < 0.03).length + (perBank.get(c.bank) ?? []).filter((x) => x !== c && !x.ref && c.score - x.score < 0.03).length;
+    const identity = c.ref || c.vendor >= 0.6;
+    if (c.tier === "EXACT" && identity && c.score >= thresholds.autoApproveThreshold - 0.15 && rivals === 0) {
+      return { documentId: inv.documentId, matchedBankTransactionId: bank.transactionId, score: c.score, status: "RECONCILED", reason: `Matched "${bank.narration}" (${pct}): exact amount${c.ref ? ", invoice number in narration" : ""}, vendor similarity ${(c.vendor * 100).toFixed(0)}%, ${c.days} day(s) apart` };
+    }
+    const why = c.tier === "NET_OF_TDS" ? "amount equals invoice net of a standard TDS rate" : c.tier === "NEAR" ? "amount differs slightly (bank charges / rounding?)" : rivals > 0 ? "more than one equally good candidate" : !identity ? "amount matches but vendor/reference does not" : "confidence below auto-approve";
+    return { documentId: inv.documentId, matchedBankTransactionId: null, score: c.score, status: "MANUAL_REVIEW", reason: `Best candidate "${bank.narration}" scored ${pct} — needs a human check: ${why}` };
+  });
 }

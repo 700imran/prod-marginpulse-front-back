@@ -9,6 +9,8 @@ import { listByStatus, listAllForExport } from "../repository/documents";
 import { listAnomalies, getAnomalyById, resolveAnomaly } from "../repository/anomalies";
 import { appendAuditLog } from "../repository/auditLog";
 import { bulkInsertBankTransactions, type NewBankTransaction } from "../repository/bankTransactions";
+import { normaliseDataset, type DatasetType } from "../pipelines/dataset";
+import { reconcileTenant } from "../pipelines/tenantReconcile";
 
 export const reconciliationRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
@@ -121,6 +123,61 @@ reconciliationRoutes.post("/bank-csv-upload", async (c) => {
   const created = await bulkInsertBankTransactions(c.get("sql"), inserts);
 
   return c.json({ transactions_created: created, rows_in_file: rows.length, bank_name: bankName });
+});
+
+
+// POST /reconciliation/dataset-upload — format-agnostic ingestion. The
+// browser parses CSV / TSV / XLSX / JSON / XML / TXT into a row grid and
+// posts it here; the header row, column mapping, dataset type, dates and
+// amounts are all detected by pipelines/dataset.ts.
+const MAX_DATASET_ROWS = 5000;
+reconciliationRoutes.post("/dataset-upload", async (c) => {
+  let body: { fileName?: string; bankName?: string; datasetType?: string; rows?: unknown };
+  try { body = await c.req.json(); } catch { return c.json({ error: "Invalid JSON body" }, 400); }
+  if (!Array.isArray(body.rows) || body.rows.length === 0) return c.json({ error: "rows must be a non-empty array" }, 400);
+  if (body.rows.length > MAX_DATASET_ROWS + 50) return c.json({ error: `File has too many rows (limit ${MAX_DATASET_ROWS}). Split it by month or quarter and upload the parts.` }, 413);
+  const grid = (body.rows as unknown[]).filter(Array.isArray) as unknown[][];
+  const forced = ["BANK_STATEMENT", "INVOICE_REGISTER", "GST_RETURN"].includes(body.datasetType ?? "") ? (body.datasetType as DatasetType) : undefined;
+  const data = normaliseDataset(grid, forced);
+  if (!data) return c.json({ error: "Could not find a header row. Expected columns like Date, Narration/Description, Debit/Credit or Invoice No, Party, Amount." }, 422);
+  if (data.bank.length + data.invoices.length === 0) return c.json({ error: data.warnings.join(" ") || "No usable rows found" }, 422);
+  if (data.datasetType === "GENERIC") return c.json({ error: data.warnings[0] }, 422);
+
+  const tenantId = c.get("tenant").tenantId;
+  const sql = c.get("sql");
+  const fileName = (body.fileName ?? "upload").slice(0, 200);
+  let created = 0;
+
+  if (data.datasetType === "BANK_STATEMENT") {
+    const dates = data.bank.map((r) => r.date).sort();
+    const existing = await sql<{ d: string; n: string; db: string; cr: string }[]>`
+      select transaction_date::text as d, coalesce(narration,'') as n, debit_amount::text as db, credit_amount::text as cr
+      from bank_transactions where tenant_id = ${tenantId} and transaction_date between ${dates[0]!} and ${dates[dates.length - 1]!}`;
+    const seen = new Set(existing.map((e) => `${e.d}|${e.n}|${parseFloat(e.db)}|${parseFloat(e.cr)}`));
+    const fresh = data.bank.filter((r) => {
+      const k = `${r.date}|${r.narration}|${r.debit}|${r.credit}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+    created = await bulkInsertBankTransactions(sql, fresh.map((r) => ({
+      tenantId, narration: r.narration, transactionDate: r.date, debitAmount: r.debit, creditAmount: r.credit,
+      bankReference: r.reference, bankName: body.bankName ?? "", sourceFilename: fileName,
+    })));
+    data.warnings.push(...(fresh.length < data.bank.length ? [`${data.bank.length - fresh.length} duplicate transaction(s) already on file were skipped.`] : []));
+  } else {
+    const values = data.invoices.map((r) => ({
+      tenant_id: tenantId, doc_type: "INVOICE", original_filename: fileName, storage_key: "", mime_type: "text/tabular", file_size_bytes: 0,
+      vendor_name: r.vendor || null, document_date: r.date, invoice_number: r.invoiceNo || null, raw_total_amount: r.total, tax_amount: r.tax || null,
+      tax_identifier: r.gstin || null, ingest_channel: "WEB_UPLOAD", processing_status: "PARSED", ocr_confidence_score: 1,
+    }));
+    await sql`insert into documents ${sql(values, "tenant_id", "doc_type", "original_filename", "storage_key", "mime_type", "file_size_bytes", "vendor_name", "document_date", "invoice_number", "raw_total_amount", "tax_amount", "tax_identifier", "ingest_channel", "processing_status", "ocr_confidence_score")}`;
+    created = values.length;
+  }
+
+  const outcome = await reconcileTenant(sql, tenantId);
+  await appendAuditLog(sql, { tenantId, entityType: "DATASET", entityId: fileName, action: "DATASET_UPLOADED", reason: `${data.datasetType}: ${created} rows`, actorEmail: c.get("tenant").ownerEmail });
+  return c.json({ datasetType: data.datasetType, rowsRead: data.rowsRead, rowsImported: created, rowsSkipped: data.rowsSkipped, warnings: data.warnings, reconciliation: outcome }, 201);
 });
 
 // --- CSV parsing helpers, exact port of the Go handler's tolerant parser ---

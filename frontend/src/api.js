@@ -63,6 +63,7 @@ async function doRequest(method, path, body) {
     // just before that had a chance to run).
     const { data, error } = await supabase.auth.refreshSession();
     if (error || !data?.session) {
+      try { sessionStorage.removeItem('mp_profile'); } catch { /* ignore */ }
       tokenManager.clearTokens();
       window.location.href = '/';
       return null;
@@ -81,6 +82,7 @@ async function doRequest(method, path, body) {
 // the app actually calls on api.* : logout and an auth-state check.
 
 export function logout() {
+  try { sessionStorage.removeItem('mp_profile'); } catch { /* ignore */ }
   tokenManager.clearTokens();
   window.location.href = '/';
 }
@@ -127,6 +129,25 @@ export async function uploadDocument(file, docType = 'INVOICE') {
     headers: { Authorization: `Bearer ${getToken()}` },
     body: form,
   });
+  return res.json();
+}
+
+// ── Any tabular dataset (CSV/TSV/XLSX/JSON/XML/TXT) ──────────────────────────
+// Parsed in the browser (lazy), classified + normalised + reconciled server-side.
+export async function uploadDataset(file, bankName = '') {
+  const { parseFileToGrid } = await import('./ingest/parseFile');
+  let rows;
+  try {
+    rows = await parseFileToGrid(file);
+  } catch (e) {
+    return { error: e.message || 'Could not read this file' };
+  }
+  const res = await fetch(`${BASE}/api/v1/reconciliation/dataset-upload`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ fileName: file.name, bankName, rows }),
+  });
+  recentGets.clear();
   return res.json();
 }
 
