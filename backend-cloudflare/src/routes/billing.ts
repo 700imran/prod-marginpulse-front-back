@@ -3,6 +3,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
+import { hmacSha256Hex, timingSafeEqual } from "../lib_razorpay_sig";
 
 async function fetchWithTimeout(
   input: RequestInfo | URL,
@@ -92,7 +93,10 @@ billingRoutes.post("/create-order", async (c) => {
       10000,
     );
 
-    const order = await rzpRes.json();
+    const order = (await rzpRes.json()) as {
+      id: string; amount: number; currency: string; receipt: string; status: string;
+      error?: { description?: string };
+    };
 
     if (!rzpRes.ok) {
       console.error("razorpay:create_order_error", order);
@@ -146,17 +150,8 @@ billingRoutes.post("/verify-payment", async (c) => {
   }
 
   const text = `${razorpay_order_id}|${razorpay_payment_id}`;
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(c.env.RAZORPAY_KEY_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text));
-  const expected = btoa(String.fromCharCode(...new Uint8Array(sig)));
-
-  if (expected !== razorpay_signature) {
+  const expected = await hmacSha256Hex(c.env.RAZORPAY_KEY_SECRET, text);
+  if (!timingSafeEqual(expected, String(razorpay_signature))) {
     return c.json({ error: "Signature mismatch" }, 400);
   }
 

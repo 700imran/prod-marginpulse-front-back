@@ -1,3 +1,4 @@
+import { hmacSha256Hex, timingSafeEqual } from "./lib_razorpay_sig";
 import { Hono } from "hono";
 import type { Env } from "./config";
 import type { Sql } from "./db";
@@ -56,17 +57,8 @@ app.post("/api/razorpay/webhook", async (c) => {
     return c.json({ error: "Webhook secret not configured" }, 500);
   }
 
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(c.env.RAZORPAY_WEBHOOK_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
-  const expected = btoa(String.fromCharCode(...new Uint8Array(sig)));
-
-  if (expected !== signature) {
+  const expected = await hmacSha256Hex(c.env.RAZORPAY_WEBHOOK_SECRET, body);
+  if (!signature || !timingSafeEqual(expected, signature)) {
     return c.json({ error: "Invalid signature" }, 400);
   }
 

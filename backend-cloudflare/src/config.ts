@@ -37,6 +37,7 @@ export interface Env {
   GST_API_USERNAME: string;       // separate from client-id — used only by gstsync.ts's /authenticate call
   RAZORPAY_KEY_ID: string;
   RAZORPAY_KEY_SECRET: string;
+  RAZORPAY_WEBHOOK_SECRET?: string;
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   SLACK_CLIENT_ID: string;

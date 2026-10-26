@@ -15,7 +15,6 @@
  */
 import { supabase } from './supabaseClient';
 import { tokenManager } from './security/tokenManager';
-import { getOcrLines } from './ocr';
 
 const BASE = process.env.REACT_APP_API_URL || '';
 
@@ -31,7 +30,28 @@ function authHeaders() {
   };
 }
 
+const inflightGets = new Map();
+const GET_TTL_MS = 5000;
+const recentGets = new Map();
+
 async function request(method, path, body) {
+  // De-dupe identical concurrent GETs and reuse very fresh results, so
+  // several components mounting together don't each hit the API.
+  if (method === 'GET') {
+    const hit = recentGets.get(path);
+    if (hit && Date.now() - hit.t < GET_TTL_MS) return hit.v;
+    if (inflightGets.has(path)) return inflightGets.get(path);
+    const p = doRequest(method, path, body)
+      .then((v) => { recentGets.set(path, { t: Date.now(), v }); return v; })
+      .finally(() => inflightGets.delete(path));
+    inflightGets.set(path, p);
+    return p;
+  }
+  recentGets.clear(); // any write invalidates cached reads
+  return doRequest(method, path, body);
+}
+
+async function doRequest(method, path, body) {
   const res = await fetch(`${BASE}${path}`, {
     method,
     headers: authHeaders(),
@@ -48,7 +68,7 @@ async function request(method, path, body) {
       return null;
     }
     // Retry original request with the refreshed token
-    return request(method, path, body);
+    return doRequest(method, path, body);
   }
   return res.json();
 }
@@ -93,6 +113,7 @@ export async function uploadDocument(file, docType = 'INVOICE') {
   form.append('doc_type', docType);
 
   try {
+    const { getOcrLines } = await import('./ocr'); // lazy: keeps pdfjs/tesseract out of the main bundle
     const ocrResult = await getOcrLines(file);
     if (ocrResult?.lines?.length) {
       form.append('ocr_lines', JSON.stringify(ocrResult.lines));
