@@ -1,89 +1,54 @@
 # Security
 
-## Authentication
+This document describes the controls that are **actually implemented and
+tested in this repository**, what still needs a one-time action by whoever
+operates the deployment, and what is deliberately not covered. It is aligned
+to OWASP ASVS (L2) and the control areas auditors look at for SOC 2 / ISO 27001
+(access control, change management, cryptography, logging, vulnerability
+management). It is **not** a certification — no third party has audited it.
 
-- Passwords: bcrypt (`internal/security/password.go`,
-  `golang.org/x/crypto/bcrypt`). Never logged, never stored/returned in
-  any API response.
-- Sessions: JWT access + refresh token pair
-  (`internal/security/jwt.go`, `golang-jwt/jwt/v5`). Every token has a
-  `jti` (JWT ID) for revocation tracking.
-- Logout / revocation: `internal/security/tokenblocklist.go` writes the
-  `jti` to Redis with a TTL matching the token's remaining lifetime
-  (`RevokeToken`) — `IsRevoked` is checked on every authenticated
-  request, so a logged-out token stops working immediately rather than
-  waiting out its natural expiry.
-- OAuth (Google, Apple): `internal/oauth/`. CSRF protection via a
-  Redis-backed one-time state token (`internal/oauth/state.go`) —
-  generated before redirecting to the provider, verified on callback,
-  then deleted. Tokens are returned to the frontend in the **URL
-  fragment**, not the query string, specifically so they're never sent
-  to any server or logged by a CDN/proxy along the way — see
-  `App.jsx`'s `consumeOAuthCallbackIfPresent()` and
-  `oauth_handlers.go`'s `oauthSuccessRedirect`.
+Run `npm test` in `backend-cloudflare/`: the security tests below are part of
+that suite and part of the CI gate that blocks deploys.
 
-## Encryption at rest
+## 1. Controls implemented
 
-- Bank account numbers: AES-256-GCM
-  (`internal/security/fieldencryption.go`), keyed by
-  `FIELD_ENCRYPTION_KEY` — separate from `JWT_SECRET_KEY` and
-  `APP_SECRET_KEY`. `MaskAccountNumber` is used for display (last 4
-  digits only) anywhere the full number isn't specifically needed.
-- **Not cross-compatible with the original Python version's Fernet
-  encryption** (AES-128-CBC+HMAC) — if you're ever migrating an
-  existing production database from the old Python backend, bank
-  account numbers need a one-time decrypt-with-old-key /
-  re-encrypt-with-new-key pass. Not an ongoing concern for a fresh
-  deployment.
+| Area | Control | Where / how it is verified |
+|---|---|---|
+| Authentication | Supabase JWT verified against JWKS (cached per isolate); issuer, `aud=authenticated`, `role`, algorithm allow-list (RS256/ES256), expiry; anon/service tokens rejected | `auth/supabase.ts`; `security.test.ts` (forged/malformed tokens, every `/api/v1` route 401 without a token) |
+| Tenant isolation | Every query on a per-tenant table carries `tenant_id`, including ID-only updates (defense in depth) | `tenant-scoping.test.ts` fails the build if a new query omits it |
+| Database exposure | **RLS enabled on all tables + all API-role grants revoked** (the anon key ships in the frontend; without this anyone could read every tenant) | `db/002_security_hardening.sql`; test asserts every table in `schema.sql` is covered |
+| Audit trail | Append-only `audit_log` (UPDATE blocked; DELETE blocked unless an explicit maintenance flag is set) | `db/002_security_hardening.sql` |
+| Payments | Plan price set **server-side**; order re-fetched from Razorpay and checked for tenant, paid status, currency and amount; plan upgrade is idempotent and audited; Razorpay signature is hex HMAC compared in constant time; webhook replay guard | `billing.test.ts` |
+| Input validation | Allow-list validator drops unknown/`__proto__` keys, enforces types and ranges; raw SQL only with allow-listed identifiers | `security.test.ts` (SQL-injection regression, `sql.unsafe` scan) |
+| Uploads | File signature must match extension (HTML/EXE disguised as PDF rejected), size limits enforced while streaming, filenames sanitised (no header injection / traversal), MIME derived from content not client header | `security/upload.ts`; `security.test.ts` |
+| Downloads | Signed, expiring links; HMAC key derived with HKDF (separate from the encryption key) | `storage.ts`; `security.test.ts` |
+| Webhooks | Fail **closed** when a secret is missing; WhatsApp `X-Hub-Signature-256`; constant-time compares; media URL allow-list (SSRF) | `security.test.ts` |
+| Cryptography | AES-256-GCM field encryption with random 12-byte IV for bank accounts and integration credentials | `security/fieldEncryption.ts` |
+| Transport / browser | HSTS, strict CSP (API: `default-src 'none'`; app: no inline scripts, explicit origins), `frame-ancestors 'none'`, nosniff, Referrer/Permissions policy, `Cache-Control: no-store`, CORS allow-list with `Vary: Origin` | `middleware/security.ts`, `frontend/vercel.json`, `frontend/public/_headers`; `security.test.ts` |
+| Supply chain | OCR engine/WASM served from our own origin (no runtime CDN code); legacy URL-fragment token login removed; runtime dependency audit = 0 known vulnerabilities; Dependabot weekly | `frontend/scripts/copy-ocr-assets.js`, `.github/dependabot.yml` |
+| Abuse protection | Per-isolate limiter on every request + Upstash limiter on billing (fail-closed), ROI, webhooks, dataset upload | `middleware/rateLimit.ts` |
+| Error handling | Generic JSON errors with a request id; no stack traces; health endpoint discloses nothing | `security.test.ts` |
+| Change management | CI blocks deploys unless typecheck, tests and `npm audit` (high+) pass; weekly scheduled audit; CodeQL; full-history secret scan | `.github/workflows/` |
 
-## Rate limiting
+## 2. One-time actions the operator must do (code cannot do these)
 
-- `internal/ratelimit/ratelimit.go` — a fixed-window counter backed by
-  Redis (same algorithm slowapi's Redis backend uses). Applied per
-  client IP (`ClientIP(r)`, which respects `X-Forwarded-For` behind API
-  Gateway) to auth endpoints and any other sensitive path that needs
-  it.
+1. **Run `backend-cloudflare/db/002_security_hardening.sql`** in the Supabase SQL editor, then run the two verification queries at the bottom of that file. Until this runs, the database is exposed through the public anon key.
+2. **Revoke the GitHub personal access token that was pasted into a chat** and use a fine-grained, repo-scoped, short-lived token from now on.
+3. Set Worker secrets (`wrangler secret put`): `FIELD_ENCRYPTION_KEY` (32 random bytes, base64), `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `WHATSAPP_APP_SECRET`, `WEBHOOK_INGEST_SECRET`, Upstash credentials. Webhooks refuse requests until their secret exists.
+4. In Supabase Auth: enable email confirmation, set minimum password length/strength, and turn on MFA (TOTP) for platform admins.
+5. Set `FRONTEND_ORIGIN` to the exact production origin(s). If the API is not served from `api.marginpulse.in` or Supabase is not on `*.supabase.co`, update `connect-src` in `frontend/vercel.json` and `frontend/public/_headers`, or the browser will block those calls.
+6. Enable Supabase backups / point-in-time recovery and test a restore; enable branch protection and required status checks on `main`.
 
-## AI budget guard
+## 3. Known gaps (honest list)
 
-- `internal/aibudget/aibudget.go` caps the one LLM call in the codebase
-  (the dashboard's plain-English insight, `internal/pipelines/insights`)
-  per tenant: `AI_MAX_PROMPT_TOKENS`, `AI_MAX_COMPLETION_TOKENS`,
-  `AI_REQUESTS_PER_MINUTE_PER_TENANT`, `AI_DAILY_TOKEN_BUDGET_PER_TENANT`.
-  This exists so a single tenant loading the dashboard repeatedly can't
-  run away LLM API cost.
+- **No third-party assessment.** Commission an independent penetration test before onboarding enterprise customers; this is the main thing a certificate would add.
+- **Audit trail attribution:** all actions are attributed to the tenant owner's email, not the individual team member.
+- **Key rotation:** `FIELD_ENCRYPTION_KEY` has no versioning; rotating it needs a re-encryption pass.
+- **Tokens in browser storage:** Supabase keeps the session in `localStorage`; the strict CSP is the mitigation. Moving to httpOnly cookies would need a backend session layer.
+- **Frontend toolchain:** Create React App is unmaintained; its build-time dependencies carry advisories that never ship to the browser. Plan a migration to Vite.
+- **Bulk reconciliation writes** are per-row, so uploads are capped at 5,000 rows.
+- **Not yet built:** DLP/PII retention policy and automated data-deletion workflow, SIEM export of logs, and formal incident-response runbook.
 
-## Secrets
+## 4. Reporting a vulnerability
 
-All secrets are environment variables, never committed — see
-`.env.example` for the full list and `DEPLOYMENT.md` for where they're
-set in each environment (Lambda function env vars, Redis, etc.).
-`SECRET_ROTATION_DAYS` (default 90) is informational only — there is
-**no automated rotation mechanism**; rotating `JWT_SECRET_KEY`,
-`APP_SECRET_KEY`, or `FIELD_ENCRYPTION_KEY` today means a manual
-redeploy and, for `FIELD_ENCRYPTION_KEY` specifically, a re-encryption
-pass over existing bank account records (same shape as the Fernet
-migration note above).
-
-## Webhook auth
-
-- WhatsApp webhook: Meta's own verify-token handshake on GET, then
-  signature-less POST (Meta's webhook payloads aren't independently
-  signed in this implementation — if you need to harden this, add
-  Meta's `X-Hub-Signature-256` HMAC verification).
-- Email-ingest webhook: a shared secret (`WEBHOOK_INGEST_SECRET`)
-  rather than JWT, since the caller is an email-forwarding service, not
-  a logged-in user.
-
-## Known gaps (see `TROUBLESHOOTING.md` for more)
-
-- No per-team-member identity in audit trail attribution — every
-  action (manual correction, anomaly resolve) is attributed to
-  `tenant.OwnerEmail` regardless of which invited team member actually
-  performed it. If per-user audit attribution matters before scaling
-  team accounts, this needs a real user-identity layer under the
-  tenant.
-- No automated secret rotation (see above).
-- Field encryption key has no versioning — rotating
-  `FIELD_ENCRYPTION_KEY` without a migration pass will make existing
-  encrypted bank account numbers permanently undecryptable.
+Email support@marginpulse.in with details; please do not open a public issue.

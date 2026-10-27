@@ -3,6 +3,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth, requirePlatformAdmin } from "../middleware/auth";
+import { pickValid } from "../security/validate";
 import { getPlatformSettings, updatePlatformSettings, getSlackAppConfig, setSlackAppConfig, type PlatformSettings } from "../repository/platformSettings";
 import { listAllTenants, setTenantActive, countTenants, getTenantById } from "../repository/tenants";
 import { encryptField } from "../security/fieldEncryption";
@@ -41,7 +42,11 @@ adminRoutes.get("/settings", async (c) => c.json(await buildSettingsResponse(c.g
 // masked value sent back unchanged means "leave as-is", same rule as
 // the Go original.
 adminRoutes.patch("/settings", async (c) => {
-  const req = await c.req.json();
+  const req = pickValid(await c.req.json().catch(() => null), {
+    slack_client_id: { t: "str", max: 100, allowEmpty: true }, slack_client_secret: { t: "str", max: 200, allowEmpty: true }, slack_redirect_uri: { t: "str", max: 300, allowEmpty: true, pattern: /^$|^https:\/\/[^\s]+$/ },
+    ai_insights_enabled: { t: "bool" }, whatsapp_ingest_enabled: { t: "bool" }, email_ingest_enabled: { t: "bool" },
+    razorpay_integration_enabled: { t: "bool" }, stripe_integration_enabled: { t: "bool" }, slack_integration_enabled: { t: "bool" }, new_signups_enabled: { t: "bool" },
+  }) as Record<string, any>;
   const sql = c.get("sql");
   const tenant = c.get("tenant");
 
@@ -79,8 +84,9 @@ adminRoutes.get("/tenants", async (c) => {
 
 // PATCH /admin/tenants/:id/active — suspend/reactivate without deleting data.
 adminRoutes.patch("/tenants/:id/active", async (c) => {
-  const { is_active } = await c.req.json();
+  const { is_active } = pickValid(await c.req.json().catch(() => null), { is_active: { t: "bool" } }) as { is_active: boolean };
   const tenantId = c.req.param("id");
+  if (!/^[0-9a-f-]{36}$/i.test(tenantId)) return c.json({ error: "invalid tenant id" }, 400);
   await setTenantActive(c.get("sql"), tenantId, Boolean(is_active));
   const updated = await getTenantById(c.get("sql"), tenantId);
   if (!updated) return c.json({ error: "tenant not found" }, 404);

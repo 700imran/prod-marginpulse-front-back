@@ -11,7 +11,7 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "hono": "^4.6.14",
+    "hono": "^4.13.14",
     "jose": "^5.9.6",
     "postgres": "^3.4.5"
   },

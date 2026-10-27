@@ -139,7 +139,7 @@ async function runReconciliation(env: Env, sqlIn: ReturnType<typeof getDb> | nul
     }
 
     if (result.matchedBankTransactionId) {
-      await markTransactionMatched(sql, result.matchedBankTransactionId, documentId, result.score);
+      await markTransactionMatched(sql, tenantId, result.matchedBankTransactionId, documentId, result.score);
     }
     console.log("reconciliation_completed", { documentId, status: result.status, score: result.score });
   } finally {
@@ -190,7 +190,7 @@ async function verifyTaxIdentifierTask(env: Env, args: Record<string, any>): Pro
     else if (taxId.idType === "PAN") result = await verifyPAN(env, taxId.idValue, taxId.label ?? undefined);
     else result = { status: "PENDING" as const, error: "No automated verifier for this type yet — verify manually" };
 
-    await updateTaxIdentifierVerification(sql, taxIdentifierId, result.status, result.legalName ?? null, result.error ?? null, null);
+    await updateTaxIdentifierVerification(sql, tenantId, taxIdentifierId, result.status, result.legalName ?? null, result.error ?? null, null);
     console.log("tax_identifier_verification_completed", { taxIdentifierId, status: result.status });
   } finally {
     await sql.end();
@@ -210,7 +210,7 @@ async function verifyBankAccountTask(env: Env, args: Record<string, any>): Promi
     const result = await verifyBankAccount(env, plaintext, account.ifscCode, account.accountHolderName);
     // plaintext goes out of scope here and is never stored/logged.
 
-    await updateBankAccountVerification(sql, bankAccountId, result.status, result.verifiedName ?? null, result.error ?? null);
+    await updateBankAccountVerification(sql, tenantId, bankAccountId, result.status, result.verifiedName ?? null, result.error ?? null);
     console.log("bank_account_verification_completed", { bankAccountId, status: result.status });
   } finally {
     await sql.end();

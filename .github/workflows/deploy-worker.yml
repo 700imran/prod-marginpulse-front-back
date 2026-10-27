@@ -35,6 +35,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Nothing ships unless it typechecks and every security/accuracy test passes.
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Tests (security, tenant isolation, billing, reconciliation accuracy)
+        run: npm test
+
+      - name: Dependency audit (fail on high/critical)
+        run: npm audit --omit=dev --audit-level=high
+
       - name: Deploy to Cloudflare Workers
         run: npx wrangler deploy
         env:

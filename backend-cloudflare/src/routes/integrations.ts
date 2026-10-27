@@ -6,6 +6,7 @@ import { requireAuth } from "../middleware/auth";
 import { listIntegrations, getIntegration, upsertIntegration, disconnectIntegration, markIntegrationSynced } from "../repository/integrations";
 import { bulkInsertBankTransactions } from "../repository/bankTransactions";
 import { encryptField, decryptField } from "../security/fieldEncryption";
+import { primaryOrigin } from "../middleware/security";
 import { RazorpayConnector } from "../integrations/razorpay";
 import { StripeConnector } from "../integrations/stripe";
 import { slackAuthUrl, slackExchangeCode } from "../integrations/slack";
@@ -35,7 +36,13 @@ integrationRoutes.post("/:provider/connect", requireAuth, async (c) => {
   const connector = dataConnectorFor(provider);
   if (!connector) return c.json({ error: `${provider} is not yet implemented — see src/integrations/connector.ts for what's needed to add it` }, 501);
 
-  const { credentials } = await c.req.json();
+  const body = await c.req.json().catch(() => null);
+  const rawCreds = body && typeof body === "object" ? (body as any).credentials : undefined;
+  // credentials: a flat object of short strings only (no nesting, no oversized blobs)
+  if (rawCreds !== undefined && (rawCreds === null || typeof rawCreds !== "object" || Array.isArray(rawCreds) || Object.keys(rawCreds).length > 6 || Object.entries(rawCreds).some(([k, val]) => !/^[a-z_]{1,40}$/.test(k) || typeof val !== "string" || val.length > 500))) {
+    return c.json({ error: "credentials must be a flat object of short text values" }, 422);
+  }
+  const credentials = rawCreds as Record<string, string> | undefined;
   let externalAccountId: string, externalAccountName: string;
   try {
     ({ externalAccountId, externalAccountName } = await connector.connect(credentials ?? {}));
@@ -125,7 +132,7 @@ integrationRoutes.get("/slack/callback", async (c) => {
   const code = c.req.query("code") ?? "";
   const state = c.req.query("state") ?? "";
   const tenantId = await consumeOAuthState(c.env, state);
-  if (!tenantId) return c.redirect(`${c.env.FRONTEND_ORIGIN}/?integration=slack&status=error&reason=invalid_state`, 302);
+  if (!tenantId) return c.redirect(`${primaryOrigin(c.env)}/?integration=slack&status=error&reason=invalid_state`, 302);
 
   try {
     const { accessToken, teamName, incomingWebhookUrl } = await slackExchangeCode(c.env, c.get("sql"), code);
@@ -134,8 +141,8 @@ integrationRoutes.get("/slack/callback", async (c) => {
       encryptField(c.env, incomingWebhookUrl),
     ]);
     await upsertIntegration(c.get("sql"), { tenantId, provider: "SLACK", status: "CONNECTED", accessTokenEncrypted, apiKeyEncrypted, externalAccountName: teamName });
-    return c.redirect(`${c.env.FRONTEND_ORIGIN}/?integration=slack&status=connected`, 302);
+    return c.redirect(`${primaryOrigin(c.env)}/?integration=slack&status=connected`, 302);
   } catch (e) {
-    return c.redirect(`${c.env.FRONTEND_ORIGIN}/?integration=slack&status=error`, 302);
+    return c.redirect(`${primaryOrigin(c.env)}/?integration=slack&status=error`, 302);
   }
 });

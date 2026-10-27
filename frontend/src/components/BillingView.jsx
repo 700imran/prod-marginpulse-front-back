@@ -16,12 +16,7 @@ const PLAN_OPTIONS = [
 ];
 
 function getAccessToken() {
-  return (
-    tokenManager.getAccessToken() ||
-    localStorage.getItem("mp_access_token") ||
-    localStorage.getItem("token") ||
-    ""
-  );
+  return tokenManager.getAccessToken() || "";
 }
 
 async function loadRazorpayScript() {
@@ -45,8 +40,7 @@ async function loadRazorpayScript() {
   });
 }
 
-export async function startPayment(amount) {
-  const finalAmount = Number(amount || 0);
+export async function startPayment(planId) {
   const token = getAccessToken();
 
   if (!token) {
@@ -54,8 +48,8 @@ export async function startPayment(amount) {
     return;
   }
 
-  if (!finalAmount || finalAmount <= 0) {
-    alert("Please enter a valid amount.");
+  if (!planId) {
+    alert("Please choose a plan.");
     return;
   }
 
@@ -68,13 +62,13 @@ export async function startPayment(amount) {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({ amount: finalAmount, currency: "INR" }),
+      body: JSON.stringify({ plan: planId }), // the server decides the price
     });
 
     const orderData = await orderRes.json().catch(() => ({}));
 
     if (!orderRes.ok || !orderData?.orderId || !orderData?.keyId) {
-      throw new Error(orderData?.message || "Failed to create payment order.");
+      throw new Error(orderData?.error || orderData?.message || "Failed to create payment order.");
     }
 
     const userEmail = localStorage.getItem("userEmail") || localStorage.getItem("mp_user_email") || "";
@@ -102,11 +96,13 @@ export async function startPayment(amount) {
         const verifyData = await verifyRes.json().catch(() => ({}));
 
         if (verifyRes.ok) {
-          alert("Payment successful!");
+          alert("Payment successful! Your plan is now active.");
+          try { sessionStorage.removeItem("mp_profile"); } catch { /* ignore */ }
+          window.location.reload(); // pick up the upgraded plan
           return;
         }
 
-        throw new Error(verifyData?.message || "Payment verification failed.");
+        alert(verifyData?.error || verifyData?.message || "Payment verification failed — if money was deducted, contact support@marginpulse.in with your payment id.");
       },
       prefill: {
         email: userEmail,
@@ -134,7 +130,7 @@ export default function BillingView({ tenant }) {
   const handleUpgrade = async () => {
     setIsPaying(true);
     try {
-      await startPayment(selectedPlan.price);
+      await startPayment(selectedPlan.id);
     } finally {
       setIsPaying(false);
     }

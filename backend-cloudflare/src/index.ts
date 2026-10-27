@@ -4,7 +4,10 @@ import type { Env } from "./config";
 import type { Sql } from "./db";
 import type { TenantContext } from "./auth/supabase";
 import { withDb } from "./middleware/db";
-import { requestId, securityHeaders, corsMiddleware } from "./middleware/security";
+import { requestId, securityHeaders, corsMiddleware, requestSizeLimit } from "./middleware/security";
+import { rateLimit, isolateRateLimit } from "./middleware/rateLimit";
+import { ValidationError } from "./security/validate";
+import { claimOnce } from "./ratelimit";
 import { healthRoutes } from "./routes/health";
 import { authRoutes } from "./routes/auth";
 import { documentRoutes } from "./routes/documents";
@@ -25,9 +28,17 @@ import { getDb } from "./db";
 import { listAllTenants } from "./repository/tenants";
 import { detectMissingInvoices } from "./pipelines/missingInvoice";
 
-const app = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
+export const app = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
-app.use("*", requestId, securityHeaders, corsMiddleware(), withDb);
+app.use("*", requestId, securityHeaders, corsMiddleware(), requestSizeLimit);
+// Abuse controls (before any DB work): generous per-IP ceiling everywhere,
+// tighter on public/unauthenticated and money endpoints.
+app.use("/api/*", isolateRateLimit(600, 60));
+app.use("/api/v1/roi/*", rateLimit("roi", 20, 60));
+app.use("/api/v1/billing/*", rateLimit("billing", 30, 60, { failClosed: true }));
+app.use("/webhook/*", rateLimit("webhook", 300, 60));
+app.use("/api/razorpay/*", rateLimit("rzp-webhook", 300, 60));
+app.use("*", withDb);
 
 // health check sits outside /api/v1, same as the Go router
 app.route("/", healthRoutes);
@@ -69,6 +80,16 @@ app.post("/api/razorpay/webhook", async (c) => {
     return c.json({ error: "Invalid JSON" }, 400);
   }
 
+  // Replay / duplicate-delivery guard: process each Razorpay event id once.
+  const eventId = c.req.header("X-Razorpay-Event-Id");
+  if (eventId && /^[A-Za-z0-9_-]{6,80}$/.test(eventId)) {
+    try {
+      if (!(await claimOnce(c.env, `rzp:${eventId}`))) return c.json({ status: "duplicate" }, 200);
+    } catch (e) {
+      console.error("webhook_dedupe_unavailable", (e as Error).message); // still process; handler is idempotent (log-only today)
+    }
+  }
+
   switch (event.event) {
     case "payment.captured":
       console.log("razorpay:payment_captured", event.payload?.payment?.entity?.id);
@@ -91,8 +112,10 @@ app.post("/api/razorpay/webhook", async (c) => {
 
 app.notFound((c) => c.json({ error: "not found" }, 404));
 app.onError((err, c) => {
-  console.error("unhandled_error", { path: c.req.path, error: err.message });
-  return c.json({ error: "internal server error" }, 500);
+  if (err instanceof ValidationError) return c.json({ error: err.message, field: err.field }, 422);
+  // Never leak stack traces / SQL / internals to the client; correlate via request id.
+  console.error("unhandled_error", { requestId: c.get("requestId" as never), path: c.req.path, error: err.message });
+  return c.json({ error: "internal server error", requestId: c.get("requestId" as never) }, 500);
 });
 
 export default {

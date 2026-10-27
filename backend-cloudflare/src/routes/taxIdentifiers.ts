@@ -3,6 +3,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
+import { pickValid } from "../security/validate";
 import { createTaxIdentifier, listTaxIdentifiers, getTaxIdentifierById, setPrimaryTaxIdentifier, deleteTaxIdentifier, updateTaxIdentifierVerification } from "../repository/taxIdentifiers";
 
 export const taxIdentifierRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
@@ -20,7 +21,10 @@ taxIdentifierRoutes.get("/", async (c) => {
 // ErrDuplicateTaxIdentifier's guard-item check did in Dynamo — a
 // duplicate insert fails with Postgres error code 23505.
 taxIdentifierRoutes.post("/", async (c) => {
-  const { id_type: idType, id_value: idValue, label } = await c.req.json();
+  const v = pickValid(await c.req.json().catch(() => null), {
+    id_type: { t: "str", max: 20, pattern: /^[A-Z_]{2,20}$/ }, id_value: { t: "str", max: 30, pattern: /^[A-Za-z0-9-]{4,30}$/ }, label: { t: "str", max: 100, allowEmpty: true },
+  }) as Record<string, string | undefined>;
+  const idType = v.id_type, idValue = v.id_value?.toUpperCase(), label = v.label;
   if (!idType || !idValue) return c.json({ error: "id_type and id_value are required" }, 400);
 
   const tenantId = c.get("tenant").tenantId;
@@ -41,7 +45,7 @@ taxIdentifierRoutes.post("/:id/reverify", async (c) => {
   const item = await getTaxIdentifierById(c.get("sql"), tenantId, id);
   if (!item) return c.json({ error: "tax identifier not found" }, 404);
 
-  await updateTaxIdentifierVerification(c.get("sql"), id, "PENDING", null, null, null);
+  await updateTaxIdentifierVerification(c.get("sql"), c.get("tenant").tenantId, id, "PENDING", null, null, null);
   await c.env.TAX_IDENTIFIER_QUEUE.send({ task: "verify_tax_identifier", job_id: crypto.randomUUID(), args: { tenant_id: tenantId, tax_identifier_id: id } });
   return c.json({ status: "PENDING" }, 202);
 });

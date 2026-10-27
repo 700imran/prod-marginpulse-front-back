@@ -228,35 +228,8 @@ function AppShell() {
   );
 }
 
-/**
- * Handles the redirect back from the backend after a successful
- * Google/Apple OAuth login (see internal/httpapi/oauth_handlers.go's
- * oauthSuccessRedirect — tokens ride in the URL FRAGMENT, not the query
- * string, so they're never sent to any server or logged by a CDN/proxy
- * along the way). Runs synchronously before the first render decides
- * whether to show LoginPage or the authenticated app, so a successful
- * OAuth login lands the user straight in the dashboard rather than
- * bouncing through the login screen once more.
- */
-function consumeOAuthCallbackIfPresent() {
-  if (!window.location.hash.startsWith("#/oauth-callback")) return;
-  const query = window.location.hash.split("?")[1] || "";
-  const params = new URLSearchParams(query);
-  const accessToken = params.get("access_token");
-  const refreshToken = params.get("refresh_token");
-  const tenantId = params.get("tenant_id");
-  if (accessToken && refreshToken) {
-    localStorage.setItem("mp_access_token", accessToken);
-    localStorage.setItem("mp_refresh_token", refreshToken);
-    if (tenantId) localStorage.setItem("mp_tenant_id", tenantId);
-  }
-  // Strip the tokens out of the visible URL immediately — leaving them
-  // in window.location would keep them in browser history.
-  window.history.replaceState(null, "", window.location.pathname);
-}
 
 export default function App() {
-  consumeOAuthCallbackIfPresent();
   const [authed, setAuthed] = useState(isLoggedIn());
   if (!authed) return <LoginPage onSuccess={() => setAuthed(true)} />;
   return <AppShell />;

@@ -31,7 +31,7 @@ export async function updatePlatformSettings(sql: Sql, patch: Partial<PlatformSe
     slackIntegrationOn: "slack_integration_on",
     newSignupsEnabled: "new_signups_enabled",
   };
-  const cols = Object.keys(patch) as (keyof PlatformSettings)[];
+  const cols = (Object.keys(patch) as (keyof PlatformSettings)[]).filter((k) => Object.prototype.hasOwnProperty.call(colMap, k) && patch[k] !== undefined);
   if (cols.length === 0) return;
   const setClause = cols.map((c, i) => `${colMap[c]} = $${i + 1}`).join(", ");
   await sql.unsafe(

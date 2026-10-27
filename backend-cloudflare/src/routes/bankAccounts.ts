@@ -3,6 +3,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
+import { pickValid } from "../security/validate";
 import { createBankAccount, listBankAccounts, getBankAccountById, setPrimaryBankAccount, deleteBankAccount, findByLast4AndIFSC } from "../repository/bankAccounts";
 import { encryptField, last4 } from "../security/fieldEncryption";
 
@@ -19,7 +20,12 @@ bankAccountRoutes.get("/", async (c) => {
 });
 
 bankAccountRoutes.post("/", async (c) => {
-  const { bank_name: bankName, account_holder_name: accountHolderName, account_number: accountNumber, ifsc_code: ifscCode, account_type } = await c.req.json();
+  const v = pickValid(await c.req.json().catch(() => null), {
+    bank_name: { t: "str", max: 120 }, account_holder_name: { t: "str", max: 150 },
+    account_number: { t: "str", max: 20, pattern: /^[0-9]{6,20}$/ },
+    ifsc_code: { t: "str", max: 11 }, account_type: { t: "enum", values: ["CURRENT", "SAVINGS", "OD", "CC"] },
+  }) as Record<string, string | undefined>;
+  const bankName = v.bank_name, accountHolderName = v.account_holder_name, accountNumber = v.account_number, ifscCode = v.ifsc_code?.toUpperCase(), account_type = v.account_type;
   if (!bankName || !accountHolderName || !accountNumber || !ifscCode) {
     return c.json({ error: "bank_name, account_holder_name, account_number, and ifsc_code are required" }, 400);
   }

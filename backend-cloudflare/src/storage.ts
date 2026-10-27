@@ -42,9 +42,15 @@ export function buildStorageKey(tenantId: string, documentId: string, originalFi
 // R2 object straight through. Same net effect as
 // storage.go's GetPresignedDownloadURL, one HTTP hop instead of a redirect.
 
+// Key separation: the download-link HMAC key is DERIVED (HKDF-SHA256, fixed
+// context label) from the master secret instead of reusing the AES-GCM
+// encryption key directly for a second purpose.
 async function hmacKey(secret: string): Promise<CryptoKey> {
-  const raw = new TextEncoder().encode(secret);
-  return crypto.subtle.importKey("raw", raw, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), "HKDF", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    { name: "HKDF", hash: "SHA-256", salt: new TextEncoder().encode("marginpulse/v1"), info: new TextEncoder().encode("download-link-hmac") },
+    base, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"],
+  );
 }
 
 export async function signDownloadToken(env: Env, storageKey: string, expiresInSeconds = 300): Promise<{ token: string; exp: number }> {
@@ -56,7 +62,7 @@ export async function signDownloadToken(env: Env, storageKey: string, expiresInS
 }
 
 export async function verifyDownloadToken(env: Env, storageKey: string, token: string, exp: number): Promise<boolean> {
-  if (Math.floor(Date.now() / 1000) > exp) return false;
+  if (!Number.isFinite(exp) || Math.floor(Date.now() / 1000) > exp) return false;
   const key = await hmacKey(env.FIELD_ENCRYPTION_KEY);
   const expectedSig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${storageKey}.${exp}`));
   const expectedToken = base64UrlEncode(new Uint8Array(expectedSig));

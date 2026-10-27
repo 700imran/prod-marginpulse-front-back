@@ -1,7 +1,8 @@
 import type { MiddlewareHandler } from "hono";
 import type { Env } from "../config";
 import type { Sql } from "../db";
-import { verifySupabaseToken, loadOrCreateTenant, type TenantContext } from "../auth/supabase";
+import { verifySupabaseToken, loadTenant, createTenant, type TenantContext } from "../auth/supabase";
+import { getPlatformSettings } from "../repository/platformSettings";
 
 // Replaces middleware.go's RequireAuth. Supabase issues and rotates the
 // token itself, so there's no blocklist check here — signing out is
@@ -19,7 +20,13 @@ export const requireAuth: MiddlewareHandler<{ Bindings: Env; Variables: { sql: S
     return c.json({ error: "invalid or expired token" }, 401);
   }
 
-  const tenant = await loadOrCreateTenant(c.get("sql"), claims);
+  let tenant = await loadTenant(c.get("sql"), claims);
+  if (!tenant) {
+    // The admin "new signups" switch was stored but never enforced — it is now.
+    const settings = await getPlatformSettings(c.get("sql"));
+    if (!settings.newSignupsEnabled) return c.json({ error: "new signups are currently disabled" }, 403);
+    tenant = await createTenant(c.get("sql"), claims);
+  }
   if (!tenant.isActive) {
     return c.json({ error: "account is deactivated" }, 403);
   }

@@ -3,6 +3,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
+import { rateLimit } from "../middleware/rateLimit";
 import { buildDashboardSummary, buildBusinessInsights } from "../pipelines/dashboard";
 import { detectMissingInvoices } from "../pipelines/missingInvoice";
 import { listByStatus, listAllForExport } from "../repository/documents";
@@ -131,7 +132,7 @@ reconciliationRoutes.post("/bank-csv-upload", async (c) => {
 // posts it here; the header row, column mapping, dataset type, dates and
 // amounts are all detected by pipelines/dataset.ts.
 const MAX_DATASET_ROWS = 5000;
-reconciliationRoutes.post("/dataset-upload", async (c) => {
+reconciliationRoutes.post("/dataset-upload", rateLimit("dataset", 20, 60), async (c) => {
   let body: { fileName?: string; bankName?: string; datasetType?: string; rows?: unknown };
   try { body = await c.req.json(); } catch { return c.json({ error: "Invalid JSON body" }, 400); }
   if (!Array.isArray(body.rows) || body.rows.length === 0) return c.json({ error: "rows must be a non-empty array" }, 400);
@@ -176,7 +177,7 @@ reconciliationRoutes.post("/dataset-upload", async (c) => {
   }
 
   const outcome = await reconcileTenant(sql, tenantId);
-  await appendAuditLog(sql, { tenantId, entityType: "DATASET", entityId: fileName, action: "DATASET_UPLOADED", reason: `${data.datasetType}: ${created} rows`, actorEmail: c.get("tenant").ownerEmail });
+  await appendAuditLog(sql, { tenantId, entityType: "DATASET", entityId: crypto.randomUUID(), action: "DATASET_UPLOADED", reason: `${fileName} — ${data.datasetType}: ${created} rows`, actorEmail: c.get("tenant").ownerEmail });
   return c.json({ datasetType: data.datasetType, rowsRead: data.rowsRead, rowsImported: created, rowsSkipped: data.rowsSkipped, warnings: data.warnings, reconciliation: outcome }, 201);
 });
 

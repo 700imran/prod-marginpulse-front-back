@@ -18,7 +18,16 @@ let workerPromise = null;
 // new WASM worker per document.
 function getWorker() {
   if (!workerPromise) {
-    workerPromise = createWorker('eng');
+    // Self-hosted worker, WASM core and language data (see scripts/copy-ocr-assets.js):
+    // no third-party CDN code ever runs in the app, and the CSP can stay strict.
+    const base = `${process.env.PUBLIC_URL || ''}/tesseract`;
+    workerPromise = createWorker('eng', 1, {
+      workerPath: `${base}/worker.min.js`,
+      corePath: `${base}/core`,
+      langPath: `${base}/lang`,
+      workerBlobURL: false,
+      gzip: true,
+    });
   }
   return workerPromise;
 }

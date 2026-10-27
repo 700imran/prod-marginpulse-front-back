@@ -39,10 +39,17 @@ export interface SupabaseClaims {
 // on the JWT "kid" header and caches/fetches keys as needed.
 //
 
+// Cached per isolate: creating a new remote JWKS on every request threw away
+// jose's key cache and added a network round trip to Supabase to EVERY call.
+const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
 function getSupabaseJWKS(env: Env) {
-  return createRemoteJWKSet(
-    new URL(`${env.SUPABASE_URL}/auth/v1/.well-known/jwks.json`)
-  );
+  const url = `${env.SUPABASE_URL}/auth/v1/.well-known/jwks.json`;
+  let jwks = jwksCache.get(url);
+  if (!jwks) {
+    jwks = createRemoteJWKSet(new URL(url), { cooldownDuration: 30_000, cacheMaxAge: 600_000 });
+    jwksCache.set(url, jwks);
+  }
+  return jwks;
 }
 
 // -----------------------------------------------------------------------------
@@ -57,11 +64,16 @@ export async function verifySupabaseToken(
 
   const { payload } = await jwtVerify(bearerToken, JWKS, {
     issuer: `${env.SUPABASE_URL}/auth/v1`,
+    audience: "authenticated", // rejects anon / service-role style tokens
     algorithms: ["RS256", "ES256"],
+    clockTolerance: 5,
   });
 
   if (!payload.sub || !payload.email) {
     throw new Error("Supabase token missing sub/email claim");
+  }
+  if (payload.role !== undefined && payload.role !== "authenticated") {
+    throw new Error("token role is not authenticated");
   }
 
   return {
@@ -96,27 +108,35 @@ export interface TenantContext {
 // on_auth_user_created database trigger has not fired.
 //
 
-export async function loadOrCreateTenant(
-  sql: Sql,
-  claims: SupabaseClaims
-): Promise<TenantContext> {
-  const fallbackName =
-    claims.email.split("@")[0] ?? claims.email;
+const TENANT_COLS = `
+      tenant_id as "tenantId", owner_email as "ownerEmail", business_name as "businessName",
+      plan_tier as "planTier", is_active as "isActive", is_platform_admin as "isPlatformAdmin",
+      gstin_number as "gstinNumber"`;
 
-  const rows = await sql<TenantContext[]>`
+// Returns null when this Supabase user has no tenant row yet.
+export async function loadTenant(sql: Sql, claims: SupabaseClaims): Promise<TenantContext | null> {
+  const rows = await sql.unsafe<TenantContext[]>(`select ${TENANT_COLS} from tenants where tenant_id = $1`, [claims.sub]);
+  const t = rows[0];
+  if (!t) return null;
+  if (t.ownerEmail !== claims.email) {
+    // only write when the email actually changed (was an UPDATE on every request before)
+    await sql`update tenants set owner_email = ${claims.email} where tenant_id = ${claims.sub}`;
+    t.ownerEmail = claims.email;
+  }
+  return t;
+}
+
+export async function createTenant(sql: Sql, claims: SupabaseClaims): Promise<TenantContext> {
+  const fallbackName = claims.email.split("@")[0] ?? claims.email;
+  await sql`
     insert into tenants (tenant_id, business_name, owner_email)
     values (${claims.sub}, ${fallbackName}, ${claims.email})
-    on conflict (tenant_id)
-    do update set owner_email = excluded.owner_email
-    returning
-      tenant_id as "tenantId",
-      owner_email as "ownerEmail",
-      business_name as "businessName",
-      plan_tier as "planTier",
-      is_active as "isActive",
-      is_platform_admin as "isPlatformAdmin",
-      gstin_number as "gstinNumber"
-  `;
-
+    on conflict (tenant_id) do nothing`;
+  const rows = await sql.unsafe<TenantContext[]>(`select ${TENANT_COLS} from tenants where tenant_id = $1`, [claims.sub]);
   return rows[0]!;
+}
+
+// Kept for callers that want the old behaviour.
+export async function loadOrCreateTenant(sql: Sql, claims: SupabaseClaims): Promise<TenantContext> {
+  return (await loadTenant(sql, claims)) ?? (await createTenant(sql, claims));
 }

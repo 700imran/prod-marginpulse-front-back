@@ -66,3 +66,11 @@ export async function consumeOAuthState(env: Env, state: string): Promise<string
   if (tenantId) await upstash(env, "DEL", `oauth_state:${state}`);
   return tenantId;
 }
+
+
+// Replay / duplicate-delivery protection for webhooks: returns true only the
+// FIRST time a given id is seen inside the TTL window (atomic SET NX EX).
+export async function claimOnce(env: Env, key: string, ttlSeconds = 86400): Promise<boolean> {
+  const res = await upstash(env, "SET", `once:${key}`, "1", "NX", "EX", ttlSeconds);
+  return res === "OK";
+}

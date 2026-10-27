@@ -45,11 +45,11 @@ export async function getBankAccountById(sql: Sql, tenantId: string, id: string)
   return rows[0] ?? null;
 }
 
-export async function updateBankAccountVerification(sql: Sql, id: string, status: string, verifiedName: string | null, error: string | null): Promise<void> {
+export async function updateBankAccountVerification(sql: Sql, tenantId: string, id: string, status: string, verifiedName: string | null, error: string | null): Promise<void> {
   await sql`
     update bank_accounts set verification_status = ${status}, verified_at = now(),
       verified_account_holder_name = ${verifiedName}, verification_error = ${error}, updated_at = now()
-    where bank_account_id = ${id}
+    where tenant_id = ${tenantId} and bank_account_id = ${id}
   `;
 }
 

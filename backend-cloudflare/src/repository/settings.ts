@@ -16,8 +16,19 @@ export interface IntegrationSettings {
   whatsappOutboundEnabled: boolean;
 }
 
+// Identifiers are interpolated into SQL text, so they MUST come from this
+// fixed list — never from request data (that was a SQL-injection vector).
+const ALLOWED_COLUMNS: Record<string, readonly string[]> = {
+  reconciliation_settings: ["fuzzyVendorMatching", "dateDriftToleranceDays", "ocrConfidenceThreshold"],
+  notification_settings: ["criticalItcMissingAlert", "criticalItcThresholdInr", "weeklyAuditSummary"],
+  integration_settings: ["gstAutoSyncEnabled", "gstAutoSyncDayOfMonth", "whatsappOutboundEnabled"],
+};
+
 async function upsertRow<T extends Record<string, unknown>>(sql: Sql, table: string, tenantId: string, patch: T): Promise<void> {
-  const cols = Object.keys(patch);
+  const allowed = ALLOWED_COLUMNS[table];
+  if (!allowed) throw new Error("upsertRow: unknown table");
+  const cols = Object.keys(patch).filter((k) => patch[k] !== undefined);
+  for (const c of cols) if (!allowed.includes(c)) throw new Error(`upsertRow: column not allowed: ${c}`);
   if (cols.length === 0) return;
   const colToSnake = (c: string) => c.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);
   const setClause = cols.map((c, i) => `${colToSnake(c)} = $${i + 2}`).join(", ");

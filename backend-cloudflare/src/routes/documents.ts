@@ -3,6 +3,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
+import { rateLimit } from "../middleware/rateLimit";
 import { uploadBytes, downloadBytes, buildStorageKey, signDownloadToken, verifyDownloadToken } from "../storage";
 import {
   createDocument, getDocumentById, listDocumentsByTenant, updateDocumentFields, findDuplicateDocument,
@@ -11,10 +12,23 @@ import { appendAuditLog, listAuditLogForEntity } from "../repository/auditLog";
 import { createAnomaly } from "../repository/anomalies";
 import { processDocument, parseOcrLines } from "../pipelines/ocr";
 import { finalizeOcrResult } from "../queue/consumer";
+import { pickValid, ValidationError, GSTIN_RE, type Schema } from "../security/validate";
+import { validateUpload, safeFilename } from "../security/upload";
 
 export const documentRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
 documentRoutes.use("*", requireAuth);
+
+const CORRECTABLE: Schema = {
+  vendorName: { t: "str", max: 200 },
+  vendorAddress: { t: "str", max: 500, allowEmpty: true },
+  documentDate: { t: "date" },
+  invoiceNumber: { t: "str", max: 100 },
+  rawTotalAmount: { t: "num", min: 0, max: 100_000_000_000 },
+  taxAmount: { t: "num", min: 0, max: 100_000_000_000 },
+  taxIdentifier: { t: "str", max: 15, pattern: GSTIN_RE },
+};
+const DOC_TYPES = ["INVOICE", "BANK_STATEMENT", "RECEIPT", "CREDIT_NOTE", "OTHER"];
 
 // POST /documents/upload — mirrors HandleUpload, with one real
 // architecture change: OCR happens in the browser before this request
@@ -27,28 +41,31 @@ documentRoutes.use("*", requireAuth);
 // tampered request), this still succeeds — the document just lands
 // with ocrAvailable: false for manual correction, same graceful
 // degradation as the WhatsApp/email ingestion paths in webhooks.ts.
-documentRoutes.post("/upload", async (c) => {
+documentRoutes.post("/upload", rateLimit("upload", 40, 60), async (c) => {
   const form = await c.req.formData();
   const file = form.get("file");
   const docType = (form.get("doc_type") as string) || "INVOICE";
+  if (!DOC_TYPES.includes(docType)) return c.json({ error: "invalid doc_type" }, 400);
   if (!(file instanceof File)) return c.json({ error: "file is required (multipart field \"file\")" }, 400);
-  if (file.size > 15 * 1024 * 1024) return c.json({ error: "file exceeds 15MB limit" }, 400);
+  const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+  const verdict = validateUpload(file.name, file.size, head);
+  if (!verdict.ok) return c.json({ error: verdict.error }, verdict.status);
 
   const tenant = c.get("tenant");
   const sql = c.get("sql");
   const doc = await createDocument(sql, {
     tenantId: tenant.tenantId,
     docType,
-    originalFilename: file.name,
+    originalFilename: safeFilename(file.name),
     storageKey: "", // filled in right after, once we know documentId
-    mimeType: file.type || "application/octet-stream",
+    mimeType: verdict.mime, // derived from verified file signature, never from the client header
     fileSizeBytes: file.size,
     ingestChannel: "WEB_UPLOAD",
   });
 
   const storageKey = buildStorageKey(tenant.tenantId, doc.documentId, file.name);
-  await uploadBytes(c.env, storageKey, await file.arrayBuffer(), file.type);
-  await sql`update documents set storage_key = ${storageKey} where document_id = ${doc.documentId}`;
+  await uploadBytes(c.env, storageKey, await file.arrayBuffer(), verdict.mime);
+  await sql`update documents set storage_key = ${storageKey} where tenant_id = ${tenant.tenantId} and document_id = ${doc.documentId}`;
 
   const lines = parseOcrLines(form.get("ocr_lines") as string | null);
   const result = processDocument(lines ?? []);
@@ -93,7 +110,13 @@ documentRoutes.get("/:id/download", async (c) => {
   if (!(await verifyDownloadToken(c.env, doc.storageKey, token, exp))) return c.json({ error: "invalid or expired download link" }, 403);
   const bytes = await downloadBytes(c.env, doc.storageKey);
   if (!bytes) return c.json({ error: "file missing from storage" }, 404);
-  return new Response(bytes, { headers: { "Content-Type": doc.mimeType, "Content-Disposition": `attachment; filename="${doc.originalFilename}"` } });
+  return new Response(bytes, { headers: {
+    "Content-Type": doc.mimeType,
+    "Content-Disposition": `attachment; filename="${safeFilename(doc.originalFilename)}"`,
+    "Content-Security-Policy": "default-src 'none'; sandbox",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "private, no-store",
+  } });
 });
 
 // PATCH /documents/:id/correct — mirrors HandleCorrect: one audit-log
@@ -107,7 +130,12 @@ documentRoutes.patch("/:id/correct", async (c) => {
   const existing = await getDocumentById(sql, tenant.tenantId, documentId);
   if (!existing) return c.json({ error: "document not found" }, 404);
 
-  const { reason, ...fields } = await c.req.json();
+  let raw: any;
+  try { raw = await c.req.json(); } catch { return c.json({ error: "body must be valid JSON" }, 400); }
+  // Only these human-editable fields may change. processingStatus, matched ids,
+  // scores, storageKey, tenantId etc. are system-owned and silently dropped.
+  const fields = pickValid(raw, CORRECTABLE) as Record<string, any>;
+  const reason = typeof raw?.reason === "string" ? raw.reason.slice(0, 500) : undefined;
   const patchable = ["vendorName", "vendorAddress", "documentDate", "invoiceNumber", "rawTotalAmount", "taxAmount", "taxIdentifier"] as const;
   for (const key of patchable) {
     if (fields[key] !== undefined && String(fields[key]) !== String((existing as any)[key] ?? "")) {

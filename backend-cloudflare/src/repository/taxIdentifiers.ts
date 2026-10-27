@@ -39,13 +39,13 @@ export async function getTaxIdentifierById(sql: Sql, tenantId: string, id: strin
 }
 
 export async function updateTaxIdentifierVerification(
-  sql: Sql, id: string, status: string, legalName: string | null, error: string | null, metadata: unknown,
+  sql: Sql, tenantId: string, id: string, status: string, legalName: string | null, error: string | null, metadata: unknown,
 ): Promise<void> {
   await sql`
     update tax_identifiers set
       verification_status = ${status}, verified_at = now(), verified_legal_name = ${legalName},
       verification_error = ${error}, verified_metadata = ${sql.json((metadata ?? {}) as any)}, updated_at = now()
-    where tax_identifier_id = ${id}
+    where tenant_id = ${tenantId} and tax_identifier_id = ${id}
   `;
 }
 

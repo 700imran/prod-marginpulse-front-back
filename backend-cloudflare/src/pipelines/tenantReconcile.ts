@@ -25,7 +25,7 @@ export async function reconcileTenant(sql: Sql, tenantId: string): Promise<{ rec
       processingStatus: r.status === "RECONCILED" ? "RECONCILED" : "PARSED",
       matchedBankTransactionId: r.matchedBankTransactionId ?? undefined,
     });
-    if (r.matchedBankTransactionId) await markTransactionMatched(sql, r.matchedBankTransactionId, r.documentId, r.score);
+    if (r.matchedBankTransactionId) await markTransactionMatched(sql, tenantId, r.matchedBankTransactionId, r.documentId, r.score);
     if (r.status === "RECONCILED") tally.reconciled++;
     else if (r.status === "FAILED") tally.failed++;
     else if (r.status === "MANUAL_REVIEW") tally.review++;

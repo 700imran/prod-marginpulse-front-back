@@ -1,0 +1,61 @@
+name: Security & quality gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1" # weekly: catches newly published advisories even with no code change
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: backend-cloudflare } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npm audit --omit=dev --audit-level=high
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: frontend } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - run: npm ci
+      - run: npm run build
+        env: { CI: "false" }
+      - name: No inline scripts (strict CSP depends on it)
+        run: "! grep -q '<script>' build/index.html"
+      - run: npm audit --omit=dev --audit-level=high
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 } # scan full history, not just the tip
+      - name: Scan for committed secrets
+        run: |
+          set -e
+          PATTERN='(github_pat_[A-Za-z0-9_]{20,}|ghp_[A-Za-z0-9]{30,}|sk_live_[A-Za-z0-9]{16,}|rzp_live_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|SUPABASE_SERVICE_ROLE_KEY\s*=\s*eyJ)'
+          if git log --all -p --no-color | grep -E "^\+" | grep -Ev "^\+\+\+" | grep -E "$PATTERN" | grep -v "placeholder=" | head -5 | grep .; then
+            echo "::error::Possible secret found in git history — rotate it and purge history"; exit 1
+          fi
+
+  codeql:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, security-events: write }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with: { languages: javascript-typescript }
+      - uses: github/codeql-action/analyze@v3

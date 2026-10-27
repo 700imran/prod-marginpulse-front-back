@@ -1,3 +1,4 @@
+import { primaryOrigin } from "./middleware/security";
 import type { Env } from "./config";
 
 // DELIBERATE PROVIDER CHANGE, not a straight port: internal/email/email.go
@@ -32,6 +33,6 @@ export async function sendEmail(env: Env, to: string, subject: string, htmlBody:
 export async function sendTeamInvite(env: Env, toEmail: string, businessName: string, inviteToken: string, role: string): Promise<void> {
   const subject = `You've been invited to join ${businessName} on MarginPulse Pro`;
   const body = `<p>You've been invited to join <strong>${businessName}</strong> on MarginPulse Pro as a <strong>${role}</strong>.</p>
-<p><a href="${env.FRONTEND_ORIGIN}/accept-invite?token=${inviteToken}">Accept invitation</a></p>`;
+<p><a href="${primaryOrigin(env)}/accept-invite?token=${encodeURIComponent(inviteToken)}">Accept invitation</a></p>`;
   await sendEmail(env, toEmail, subject, body);
 }

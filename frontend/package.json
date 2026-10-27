@@ -4,23 +4,23 @@
   "private": true,
   "dependencies": {
     "@supabase/supabase-js": "^2.116.0",
-    "ajv": "8.17.1",
-    "ajv-keywords": "5.1.0",
     "papaparse": "^5.7.0",
     "pdfjs-dist": "^6.3.289",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-scripts": "5.0.1",
     "read-excel-file": "^9.3.12",
     "recharts": "^3.10.1",
-    "tesseract.js": "^7.0.0"
+    "tesseract.js": "^7.0.0",
+    "@tesseract.js-data/eng": "^1.0.0"
   },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "deploy": "npm run build && npx wrangler deploy --assets=./build",
-    "preview": "npm run build && npx wrangler dev --assets=./build"
+    "preview": "npm run build && npx wrangler dev --assets=./build",
+    "prebuild": "node scripts/copy-ocr-assets.js",
+    "prestart": "node scripts/copy-ocr-assets.js"
   },
   "browserslist": {
     "production": [
@@ -32,5 +32,10 @@
       "last 1 chrome version",
       "last 1 firefox version"
     ]
+  },
+  "devDependencies": {
+    "react-scripts": "5.0.1",
+    "ajv": "8.17.1",
+    "ajv-keywords": "5.1.0"
   }
 }

@@ -59,10 +59,10 @@ export async function listUnmatchedBankTransactions(sql: Sql, tenantId: string):
   );
 }
 
-export async function markTransactionMatched(sql: Sql, transactionId: string, documentId: string, score: number): Promise<void> {
+export async function markTransactionMatched(sql: Sql, tenantId: string, transactionId: string, documentId: string, score: number): Promise<void> {
   await sql`
     update bank_transactions set reconciliation_status = 'MATCHED', matched_document_id = ${documentId}, match_score = ${score}
-    where transaction_id = ${transactionId}
+    where tenant_id = ${tenantId} and transaction_id = ${transactionId}
   `;
 }
 

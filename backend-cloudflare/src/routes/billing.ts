@@ -1,9 +1,22 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { Env } from "../config";
 import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
 import { hmacSha256Hex, timingSafeEqual } from "../lib_razorpay_sig";
+import { appendAuditLog } from "../repository/auditLog";
+
+// Prices live on the SERVER. The client only says which plan it wants — it can
+// never choose the amount (previously POST {amount: 1} bought any plan for Rs 1).
+// Keep in sync with PLAN_OPTIONS in frontend BillingView.jsx (display only).
+export const PLANS = {
+  starter: { tier: "STARTER", priceInr: 499, rank: 1 },
+  pro: { tier: "GROWTH", priceInr: 1499, rank: 2 },
+  enterprise: { tier: "ENTERPRISE", priceInr: 4999, rank: 3 },
+} as const;
+type PlanId = keyof typeof PLANS;
+const isPlanId = (v: unknown): v is PlanId => typeof v === "string" && Object.prototype.hasOwnProperty.call(PLANS, v);
+const TIER_RANK: Record<string, number> = { FREE: 0, STARTER: 1, GROWTH: 2, ENTERPRISE: 3 };
 
 async function fetchWithTimeout(
   input: RequestInfo | URL,
@@ -25,6 +38,7 @@ async function fetchWithTimeout(
   }
 }
 
+type BillingCtx = Context<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>;
 export const billingRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
 billingRoutes.use("*", requireAuth);
@@ -43,7 +57,7 @@ billingRoutes.get("/usage", async (c) => {
 });
 
 // ─── Razorpay: Create Order ───────────────────────────────
-billingRoutes.post("/create-order", async (c) => {
+export const createOrderHandler = async (c: BillingCtx) => {
   const tenant = c.get("tenant");
 
   if (!c.env.RAZORPAY_KEY_ID || !c.env.RAZORPAY_KEY_SECRET) {
@@ -61,14 +75,15 @@ billingRoutes.post("/create-order", async (c) => {
     return c.json({ error: "Invalid JSON body" }, 400);
   }
 
-  const amount = parseInt(body.amount, 10);
-  const currency = body.currency || "INR";
-
-  if (!amount || amount < 1) {
-    return c.json({ error: "amount is required and must be a positive integer" }, 400);
+  if (!isPlanId(body?.plan)) {
+    return c.json({ error: "plan must be one of: starter, pro, enterprise" }, 400);
   }
+  const planId: PlanId = body.plan;
+  const amount = PLANS[planId].priceInr;
+  const currency = "INR";
 
-  const receipt = `order_${tenant.tenantId}_${Date.now()}`;
+  // Razorpay rejects receipts longer than 40 chars — the old `order_<uuid>_<ts>` was 56.
+  const receipt = `mp_${tenant.tenantId.slice(0, 8)}_${Date.now().toString(36)}`;
   const auth = btoa(`${c.env.RAZORPAY_KEY_ID}:${c.env.RAZORPAY_KEY_SECRET}`);
 
   try {
@@ -86,7 +101,7 @@ billingRoutes.post("/create-order", async (c) => {
           receipt,
           notes: {
             tenantId: tenant.tenantId,
-            planTier: tenant.planTier,
+            plan: planId,
           },
         }),
       },
@@ -120,13 +135,14 @@ billingRoutes.post("/create-order", async (c) => {
     console.error("razorpay:create_order_exception", e);
     return c.json({ error: e instanceof Error ? e.message : "Failed to create Razorpay order" }, 500);
   }
-});
+};
+billingRoutes.post("/create-order", createOrderHandler);
 
 // ─── Razorpay: Verify Payment ───────���─────────────────────
-billingRoutes.post("/verify-payment", async (c) => {
+export const verifyPaymentHandler = async (c: BillingCtx) => {
   const tenant = c.get("tenant");
 
-  if (!c.env.RAZORPAY_KEY_SECRET) {
+  if (!c.env.RAZORPAY_KEY_SECRET || !c.env.RAZORPAY_KEY_ID) {
     console.error("razorpay:missing_verification_secret");
     return c.json({ error: "Razorpay is not configured" }, 500);
   }
@@ -155,15 +171,49 @@ billingRoutes.post("/verify-payment", async (c) => {
     return c.json({ error: "Signature mismatch" }, 400);
   }
 
-  console.log("razorpay:payment_verified", {
-    orderId: razorpay_order_id,
-    paymentId: razorpay_payment_id,
-    tenantId: tenant.tenantId,
-  });
+  // A valid signature only proves Razorpay issued this order/payment pair — NOT that
+  // it belongs to this tenant or paid the right amount. Re-fetch the order from
+  // Razorpay (source of truth) and check owner, status, currency and amount.
+  let order: { id: string; status: string; amount: number; amount_paid?: number; currency: string; notes?: Record<string, string> };
+  try {
+    const auth = btoa(`${c.env.RAZORPAY_KEY_ID}:${c.env.RAZORPAY_KEY_SECRET}`);
+    const r = await fetchWithTimeout(`https://api.razorpay.com/v1/orders/${encodeURIComponent(String(razorpay_order_id))}`, { headers: { Authorization: `Basic ${auth}` } }, 10000);
+    if (!r.ok) return c.json({ error: "Could not confirm the order with Razorpay" }, 502);
+    order = (await r.json()) as typeof order;
+  } catch (e) {
+    console.error("razorpay:order_fetch_failed", (e as Error).message);
+    return c.json({ error: "Could not confirm the order with Razorpay" }, 502);
+  }
+  const planId = order.notes?.plan;
+  if (order.notes?.tenantId !== tenant.tenantId || !isPlanId(planId)) {
+    console.error("razorpay:order_owner_mismatch", { orderId: order.id, tenantId: tenant.tenantId });
+    return c.json({ error: "This order does not belong to your account" }, 403);
+  }
+  if (order.status !== "paid" || order.currency !== "INR" || order.amount !== PLANS[planId].priceInr * 100 || (order.amount_paid ?? order.amount) !== order.amount) {
+    return c.json({ error: "Payment not completed for the full plan amount" }, 402);
+  }
 
-  return c.json({
-    status: "verified",
-    orderId: razorpay_order_id,
-    paymentId: razorpay_payment_id,
-  });
-});
+  // Idempotent: the same payment can be verified (or retried) any number of times.
+  const sql = c.get("sql");
+  const already = await sql<{ n: string }[]>`
+    select count(*)::text as n from audit_log
+    where tenant_id = ${tenant.tenantId} and action = 'PLAN_UPGRADED' and reason like ${"%" + String(razorpay_payment_id).replace(/[%_\\]/g, "") + "%"}`;
+  const newTier = PLANS[planId].tier;
+  let applied = false;
+  if (parseInt(already[0]?.n ?? "0", 10) === 0) {
+    if ((TIER_RANK[tenant.planTier] ?? 0) < PLANS[planId].rank) {
+      await sql`update tenants set plan_tier = ${newTier}, updated_at = now() where tenant_id = ${tenant.tenantId}`;
+      applied = true;
+    }
+    await appendAuditLog(sql, {
+      tenantId: tenant.tenantId, entityType: "TENANT", entityId: tenant.tenantId, action: "PLAN_UPGRADED",
+      fieldName: "plan_tier", oldValue: tenant.planTier, newValue: applied ? newTier : tenant.planTier,
+      reason: `razorpay payment ${razorpay_payment_id} order ${order.id}${applied ? "" : " (no downgrade applied)"}`,
+      actorEmail: tenant.ownerEmail,
+    });
+  }
+  console.log("razorpay:payment_verified", { orderId: order.id, paymentId: razorpay_payment_id, tenantId: tenant.tenantId, planTier: applied ? newTier : tenant.planTier });
+
+  return c.json({ status: "verified", orderId: order.id, paymentId: razorpay_payment_id, planTier: applied ? newTier : tenant.planTier });
+};
+billingRoutes.post("/verify-payment", verifyPaymentHandler);
