@@ -92,6 +92,8 @@ export interface TenantContext {
   tenantId: string;
   ownerEmail: string;
   businessName: string;
+  displayName: string | null;
+  phoneNumber: string | null;
   planTier: string;
   isActive: boolean;
   isPlatformAdmin: boolean;
@@ -109,12 +111,24 @@ export interface TenantContext {
 //
 
 const TENANT_COLS = `
-      tenant_id as "tenantId", owner_email as "ownerEmail", business_name as "businessName",
+      tenant_id as "tenantId", owner_email as "ownerEmail", business_name as "businessName", display_name as "displayName", phone_number as "phoneNumber",
       plan_tier as "planTier", is_active as "isActive", is_platform_admin as "isPlatformAdmin",
       gstin_number as "gstinNumber"`;
 
+// Per-isolate tenant cache. requireAuth runs on EVERY request; without this each one
+// paid a database round trip just to re-read the same tenant row. A short TTL keeps
+// deactivation / plan changes effective within seconds, and writers call
+// invalidateTenantCache() so the isolate that served the write sees it immediately.
+const TENANT_TTL_MS = 15_000;
+const tenantCache = new Map<string, { t: number; v: TenantContext }>();
+export function invalidateTenantCache(tenantId?: string): void {
+  if (tenantId) tenantCache.delete(tenantId); else tenantCache.clear();
+}
+
 // Returns null when this Supabase user has no tenant row yet.
 export async function loadTenant(sql: Sql, claims: SupabaseClaims): Promise<TenantContext | null> {
+  const hit = tenantCache.get(claims.sub);
+  if (hit && Date.now() - hit.t < TENANT_TTL_MS && hit.v.ownerEmail === claims.email) return { ...hit.v };
   const rows = await sql.unsafe<TenantContext[]>(`select ${TENANT_COLS} from tenants where tenant_id = $1`, [claims.sub]);
   const t = rows[0];
   if (!t) return null;
@@ -123,7 +137,9 @@ export async function loadTenant(sql: Sql, claims: SupabaseClaims): Promise<Tena
     await sql`update tenants set owner_email = ${claims.email} where tenant_id = ${claims.sub}`;
     t.ownerEmail = claims.email;
   }
-  return t;
+  if (tenantCache.size > 2000) tenantCache.clear();
+  tenantCache.set(claims.sub, { t: Date.now(), v: t });
+  return { ...t };
 }
 
 export async function createTenant(sql: Sql, claims: SupabaseClaims): Promise<TenantContext> {

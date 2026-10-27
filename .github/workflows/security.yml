@@ -32,6 +32,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 20 }
       - run: npm ci
+      - name: Frontend tests (refresh speed, identity header)
+        run: npm test -- --watchAll=false
+        env: { CI: "true" }
       - run: npm run build
         env: { CI: "false" }
       - name: No inline scripts (strict CSP depends on it)

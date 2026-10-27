@@ -4,6 +4,7 @@ import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
 import { hmacSha256Hex, timingSafeEqual } from "../lib_razorpay_sig";
+import { invalidateTenantCache } from "../auth/supabase";
 import { appendAuditLog } from "../repository/auditLog";
 
 // Prices live on the SERVER. The client only says which plan it wants — it can
@@ -203,6 +204,7 @@ export const verifyPaymentHandler = async (c: BillingCtx) => {
   if (parseInt(already[0]?.n ?? "0", 10) === 0) {
     if ((TIER_RANK[tenant.planTier] ?? 0) < PLANS[planId].rank) {
       await sql`update tenants set plan_tier = ${newTier}, updated_at = now() where tenant_id = ${tenant.tenantId}`;
+      invalidateTenantCache(tenant.tenantId);
       applied = true;
     }
     await appendAuditLog(sql, {

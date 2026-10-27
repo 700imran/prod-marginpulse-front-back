@@ -70,6 +70,12 @@ body { background-color: #e8eef2; color: var(--text-dark); }
 .nav-item:hover { background-color: rgba(24, 196, 150, 0.05); color: var(--text-dark); }
 .nav-item.active { background-color: var(--primary-light); color: var(--primary-color); }
 .nav-badge { margin-left: auto; font-size: 10px; padding: 3px 8px; border-radius: 12px; font-weight: 800; }
+.view-skeleton { padding: 8px 0; }
+.skeleton { background: linear-gradient(90deg, #e9edf0 25%, #f4f6f8 50%, #e9edf0 75%); background-size: 200% 100%; animation: mp-shimmer 1.1s infinite linear; border-radius: 12px; }
+.sk-title { height: 28px; width: 38%; margin-bottom: 20px; }
+.sk-row { height: 74px; margin-bottom: 14px; }
+.sk-row.short { width: 62%; }
+@keyframes mp-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .view-loading { padding: 60px 0; text-align: center; color: var(--text-gray); font-size: 14px; }
 .badge-pro { background: rgba(24, 196, 150, 0.1); color: var(--pro-color); }
 .badge-growth { background: rgba(99, 102, 241, 0.1); color: var(--growth-color); }

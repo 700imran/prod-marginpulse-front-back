@@ -3,28 +3,62 @@
  * user-provided mockup), with every nav item wired to real data and a
  * working Profile dropdown (load/edit/save, change password, logout).
  */
-import { useState, useEffect, useRef, useCallback, lazy, Suspense } from "react";
+import { useState, useEffect, useRef, useCallback, useTransition, lazy, Suspense } from "react";
 import LoginPage from "./LoginPage";
-import { isLoggedIn, logout, getProfile } from "./api";
+import { isLoggedIn, logout, getProfile, prefetchAppData } from "./api";
+import { tokenManager } from "./security/tokenManager";
 import { GLOBAL_CSS, Icons, NAV_SECTIONS, Toast } from "./theme";
 
 // Every screen is its own chunk, loaded only when navigated to — keeps
 // the initial bundle to just the app shell + whichever screen loads
 // first, instead of shipping all 14 screens' code up front.
-const DashboardView = lazy(() => import("./components/DashboardView"));
-const DocumentsView = lazy(() => import("./components/DocumentsView"));
-const GSTSyncView = lazy(() => import("./components/GSTSyncView"));
-const ProfileView = lazy(() => import("./components/ProfileView"));
-const TaxBankView = lazy(() => import("./components/TaxBankView"));
-const ReconciliationRulesView = lazy(() => import("./components/ReconciliationRulesView"));
-const IntegrationsView = lazy(() => import("./components/IntegrationsView"));
-const NotificationsView = lazy(() => import("./components/NotificationsView"));
-const SecurityView = lazy(() => import("./components/SecurityView"));
-const BillingView = lazy(() => import("./components/BillingView"));
-const TeamView = lazy(() => import("./components/TeamView"));
-const AdminPanelView = lazy(() => import("./components/AdminPanelView"));
-const ROICalculatorView = lazy(() => import("./components/ROICalculatorView"));
-const AuditLogView = lazy(() => import("./components/AuditLogView"));
+const loaders = {
+  dashboard: () => import("./components/DashboardView"),
+  documents: () => import("./components/DocumentsView"),
+  gst: () => import("./components/GSTSyncView"),
+  profile: () => import("./components/ProfileView"),
+  taxbank: () => import("./components/TaxBankView"),
+  recon: () => import("./components/ReconciliationRulesView"),
+  api: () => import("./components/IntegrationsView"),
+  notify: () => import("./components/NotificationsView"),
+  security: () => import("./components/SecurityView"),
+  billing: () => import("./components/BillingView"),
+  team: () => import("./components/TeamView"),
+  admin: () => import("./components/AdminPanelView"),
+  roi: () => import("./components/ROICalculatorView"),
+  auditlog: () => import("./components/AuditLogView"),
+};
+const DashboardView = lazy(loaders.dashboard);
+const DocumentsView = lazy(loaders.documents);
+const GSTSyncView = lazy(loaders.gst);
+const ProfileView = lazy(loaders.profile);
+const TaxBankView = lazy(loaders.taxbank);
+const ReconciliationRulesView = lazy(loaders.recon);
+const IntegrationsView = lazy(loaders.api);
+const NotificationsView = lazy(loaders.notify);
+const SecurityView = lazy(loaders.security);
+const BillingView = lazy(loaders.billing);
+const TeamView = lazy(loaders.team);
+const AdminPanelView = lazy(loaders.admin);
+const ROICalculatorView = lazy(loaders.roi);
+const AuditLogView = lazy(loaders.auditlog);
+
+// Minimal identity (name / org / plan) kept across tabs and refreshes so the
+// header never has to say "Loading…". Only used when it belongs to the signed-in user.
+function readIdentityHint() {
+  try {
+    const h = JSON.parse(localStorage.getItem("mp_identity") || "null");
+    return h && h.tenantId && h.tenantId === tokenManager.getTenantId() ? h : null;
+  } catch { return null; }
+}
+function saveIdentityHint(p) {
+  try {
+    localStorage.setItem("mp_identity", JSON.stringify({
+      tenantId: p.tenantId, displayName: p.displayName ?? null, businessName: p.businessName ?? null,
+      ownerEmail: p.ownerEmail ?? null, planTier: p.planTier ?? null, isPlatformAdmin: !!p.isPlatformAdmin,
+    }));
+  } catch { /* storage unavailable */ }
+}
 
 function initials(name) {
   if (!name) return "??";
@@ -36,10 +70,18 @@ function initials(name) {
 function AppShell() {
   const [activeNav, setActiveNav] = useState("dashboard");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [tenant, setTenant] = useState(null);
-  // Stale-while-revalidate: paint instantly from the last known profile,
-  // refresh in the background, and only show a loading state on the very first visit.
-  const cachedProfile = (() => { try { return JSON.parse(sessionStorage.getItem("mp_profile") || "null"); } catch { return null; } })();
+  const [, startTransition] = useTransition();
+  const [viewKey, setViewKey] = useState(0);
+  // Paint instantly from what we already know (full profile for this tab, else the
+  // small identity hint) and refresh in the background — no spinner on refresh.
+  const [cachedProfile] = useState(() => {
+    try {
+      const full = JSON.parse(sessionStorage.getItem("mp_profile") || "null");
+      if (full?.tenantId && full.tenantId === tokenManager.getTenantId()) return full;
+    } catch { /* ignore */ }
+    return readIdentityHint();
+  });
+  const [tenant, setTenant] = useState(cachedProfile);
   const [profile, setProfile] = useState(cachedProfile);
   const [profileLoading, setProfileLoading] = useState(!cachedProfile);
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -53,7 +95,6 @@ function AppShell() {
 
   useEffect(() => {
     let active = true;
-    if (cachedProfile) setTenant(cachedProfile);
     getProfile()
       .then((data) => {
         if (!active) return;
@@ -62,6 +103,7 @@ function AppShell() {
           setProfile(data);
           setTenant(data);
           try { sessionStorage.setItem("mp_profile", JSON.stringify(data)); } catch { /* storage unavailable */ }
+          saveIdentityHint(data);
         }
         setProfileLoading(false);
       })
@@ -69,8 +111,32 @@ function AppShell() {
         if (active) setProfileLoading(false);
       });
 
+    // After the first paint: pull every screen's code and data into cache in the
+    // background, so clicking any feature (Pro / Growth / unlabelled) is instant.
+    const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 150));
+    const handle = idle(() => {
+      Object.values(loaders).forEach((load) => load().catch(() => {}));
+      prefetchAppData();
+    });
+
+    // Background refresh found newer data → re-read the open screen (from cache, instant),
+    // unless the user is typing, so we never wipe a form they're filling in.
+    let timer;
+    const onUpdated = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const el = document.activeElement;
+        if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) return;
+        setViewKey((k) => k + 1);
+      }, 150);
+    };
+    window.addEventListener("mp:data-updated", onUpdated);
+
     return () => {
       active = false;
+      clearTimeout(timer);
+      window.removeEventListener("mp:data-updated", onUpdated);
+      if (window.cancelIdleCallback && typeof handle === "number") window.cancelIdleCallback(handle);
     };
   }, []);
 
@@ -90,11 +156,14 @@ function AppShell() {
     : NAV_SECTIONS;
 
   const activeTitle = navSections.flatMap((s) => s.items).find((i) => i.id === activeNav)?.label || "Dashboard";
-  const displayName = tenant?.displayName || tenant?.businessName || "Loading…";
+  // Name → organisation → what the sign-in session already knows. Never "Loading…".
+  const displayName = tenant?.displayName || tenant?.businessName || tokenManager.getUserLabel() || "My workspace";
+  const orgName = tenant?.businessName && tenant.businessName !== displayName ? tenant.businessName : "";
+  const navigate = (id) => startTransition(() => setActiveNav(id)); // keep the current screen visible until the next is ready
 
   function renderContent() {
     switch (activeNav) {
-      case "dashboard": return <DashboardView onToast={showToast} tenant={tenant} onNavigate={setActiveNav} />;
+      case "dashboard": return <DashboardView onToast={showToast} tenant={tenant} onNavigate={navigate} />;
       case "documents": return <DocumentsView onToast={showToast} />;
       case "gst": return <GSTSyncView onToast={showToast} />;
       case "profile":
@@ -106,6 +175,7 @@ function AppShell() {
             onProfileUpdated={(updated) => {
               setProfile(updated ?? profile);
               setTenant(updated ?? tenant);
+              if (updated?.tenantId) { saveIdentityHint(updated); try { sessionStorage.setItem("mp_profile", JSON.stringify(updated)); } catch { /* ignore */ } }
             }}
           />
         );
@@ -168,7 +238,8 @@ function AppShell() {
                 <button
                   key={item.id}
                   className={`nav-item ${activeNav === item.id ? "active" : ""}`}
-                  onClick={() => setActiveNav(item.id)}
+                  onClick={() => navigate(item.id)}
+                  onMouseEnter={() => loaders[item.id]?.().catch(() => {})}
                 >
                   <span className="icon-wrapper">{item.icon}</span>
                   <span className="nav-label">{item.label}</span>
@@ -196,15 +267,16 @@ function AppShell() {
                 <div className="profile-dropdown" onClick={(e) => e.stopPropagation()}>
                   <div className="profile-dropdown-header">
                     <div style={{ fontWeight: 700, fontSize: 14 }}>{displayName}</div>
-                    <div style={{ fontSize: 12, color: "var(--text-gray)" }}>{tenant?.ownerEmail}</div>
+                    {orgName && <div style={{ fontSize: 12, fontWeight: 600 }}>{orgName}</div>}
+                    <div style={{ fontSize: 12, color: "var(--text-gray)" }}>{tenant?.ownerEmail || tokenManager.getUserLabel()}</div>
                   </div>
-                  <button className="profile-dropdown-item" onClick={() => { setActiveNav("profile"); setDropdownOpen(false); }}>
+                  <button className="profile-dropdown-item" onClick={() => { navigate("profile"); setDropdownOpen(false); }}>
                     <span className="icon-wrapper"><Icons.Profile /></span> Edit Profile
                   </button>
-                  <button className="profile-dropdown-item" onClick={() => { setActiveNav("taxbank"); setDropdownOpen(false); }}>
+                  <button className="profile-dropdown-item" onClick={() => { navigate("taxbank"); setDropdownOpen(false); }}>
                     <span className="icon-wrapper"><Icons.Bank /></span> Tax IDs & Bank Accounts
                   </button>
-                  <button className="profile-dropdown-item" onClick={() => { setActiveNav("security"); setDropdownOpen(false); }}>
+                  <button className="profile-dropdown-item" onClick={() => { navigate("security"); setDropdownOpen(false); }}>
                     <span className="icon-wrapper"><Icons.Lock /></span> Security & Password
                   </button>
                   <button className="profile-dropdown-item danger" onClick={() => logout()}>
@@ -216,8 +288,8 @@ function AppShell() {
           </div>
 
           <div className="fade-in">
-            <Suspense fallback={<div className="view-loading">Loading…</div>}>
-              {renderContent()}
+            <Suspense fallback={<div className="view-skeleton" aria-busy="true"><div className="skeleton sk-title" /><div className="skeleton sk-row" /><div className="skeleton sk-row" /><div className="skeleton sk-row short" /></div>}>
+              <div key={viewKey}>{renderContent()}</div>
             </Suspense>
           </div>
         </main>

@@ -18,60 +18,115 @@ import { tokenManager } from './security/tokenManager';
 
 const BASE = process.env.REACT_APP_API_URL || '';
 
-function getToken() {
-  return tokenManager.getAccessToken();
-}
-
-function authHeaders() {
-  const token = getToken();
+async function authHeaders() {
+  // Waits only if the stored token is missing/expiring (see tokenManager).
+  const token = await tokenManager.getValidAccessToken();
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
 }
 
+// ── Stale-while-revalidate data cache ────────────────────────────────────────
+// GET responses are kept in sessionStorage (per user, wiped on logout / tab close).
+// A refresh therefore paints every screen from the last known data in milliseconds,
+// then refreshes in the background; if anything changed, the app is told via the
+// 'mp:data-updated' event and re-reads (from cache, instantly).
+const CACHE_PREFIX = 'mp_cache:';
+const FRESH_MS = 8000; // newer than this: no network at all
+const MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const inflightGets = new Map();
-const GET_TTL_MS = 5000;
-const recentGets = new Map();
 
-async function request(method, path, body) {
-  // De-dupe identical concurrent GETs and reuse very fresh results, so
-  // several components mounting together don't each hit the API.
-  if (method === 'GET') {
-    const hit = recentGets.get(path);
-    if (hit && Date.now() - hit.t < GET_TTL_MS) return hit.v;
-    if (inflightGets.has(path)) return inflightGets.get(path);
-    const p = doRequest(method, path, body)
-      .then((v) => { recentGets.set(path, { t: Date.now(), v }); return v; })
-      .finally(() => inflightGets.delete(path));
-    inflightGets.set(path, p);
-    return p;
-  }
-  recentGets.clear(); // any write invalidates cached reads
-  return doRequest(method, path, body);
+const cacheKey = (path) => `${CACHE_PREFIX}${tokenManager.getTenantId()}:${path}`;
+const isCacheable = (path) => !/\/api\/v1\/admin|download|export/.test(path);
+const isErrorPayload = (v) => v && typeof v === 'object' && !Array.isArray(v) && 'error' in v;
+
+function readCache(path) {
+  try {
+    const raw = sessionStorage.getItem(cacheKey(path));
+    const e = raw ? JSON.parse(raw) : null;
+    return e && Date.now() - e.t < MAX_AGE_MS ? e : null;
+  } catch { return null; }
+}
+function writeCache(path, v) {
+  try { sessionStorage.setItem(cacheKey(path), JSON.stringify({ t: Date.now(), v })); } catch { /* quota: just skip */ }
+}
+export function clearDataCache() {
+  try {
+    Object.keys(sessionStorage).filter((k) => k.startsWith(CACHE_PREFIX)).forEach((k) => sessionStorage.removeItem(k));
+  } catch { /* ignore */ }
+  inflightGets.clear();
 }
 
-async function doRequest(method, path, body) {
+function fetchAndCache(path) {
+  if (inflightGets.has(path)) return inflightGets.get(path);
+  const p = doRequest('GET', path)
+    .then((v) => { if (isCacheable(path) && v && !isErrorPayload(v)) writeCache(path, v); return v; })
+    .finally(() => inflightGets.delete(path));
+  inflightGets.set(path, p);
+  return p;
+}
+
+async function request(method, path, body) {
+  if (method === 'GET') {
+    const hit = isCacheable(path) ? readCache(path) : null;
+    if (hit) {
+      if (Date.now() - hit.t > FRESH_MS) {
+        fetchAndCache(path).then((fresh) => {
+          if (fresh && !isErrorPayload(fresh) && JSON.stringify(fresh) !== JSON.stringify(hit.v)) {
+            window.dispatchEvent(new Event('mp:data-updated'));
+          }
+        }).catch(() => {});
+      }
+      return hit.v;
+    }
+    return fetchAndCache(path);
+  }
+  clearDataCache(); // any write invalidates cached reads (before and after, so nothing stale survives)
+  try { return await doRequest(method, path, body); } finally { clearDataCache(); }
+}
+
+async function doRequest(method, path, body, retried = false) {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: authHeaders(),
+    headers: await authHeaders(),
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
-  if (res.status === 401) {
-    // Try Supabase's own refresh (it also auto-refreshes in the
-    // background, but this covers the case where a request landed
-    // just before that had a chance to run).
+  if (res.status === 401 && !retried) {
+    // Try Supabase's own refresh once (covers a token that expired in flight).
     const { data, error } = await supabase.auth.refreshSession();
     if (error || !data?.session) {
-      try { sessionStorage.removeItem('mp_profile'); } catch { /* ignore */ }
+      clearClientState();
       tokenManager.clearTokens();
       window.location.href = '/';
       return null;
     }
-    // Retry original request with the refreshed token
-    return doRequest(method, path, body);
+    return doRequest(method, path, body, true);
   }
   return res.json();
+}
+
+function clearClientState() {
+  clearDataCache();
+  try { sessionStorage.removeItem('mp_profile'); localStorage.removeItem('mp_identity'); } catch { /* ignore */ }
+}
+
+/**
+ * Warm the cache for every main screen in the background (called once after the
+ * shell paints), so the first click on any feature is already instant.
+ */
+export function prefetchAppData() {
+  const jobs = [
+    () => getDashboard(), () => listAnomalies('OPEN'), () => listBankAccounts(), () => listTaxIdentifiers(),
+    () => getDashboardInsights(), () => listDocuments(), () => getReconciliationSettings(),
+    () => getNotificationSettings(), () => getIntegrationSettings(), () => listIntegrations(),
+    () => listTeamMembers(), () => getAuditLog(undefined, undefined, 200), () => getVendorGSTStatus(), () => getITCSummary(),
+  ];
+  (async () => {
+    for (let i = 0; i < jobs.length; i += 4) {
+      await Promise.allSettled(jobs.slice(i, i + 4).map((j) => j()));
+    }
+  })();
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -82,7 +137,7 @@ async function doRequest(method, path, body) {
 // the app actually calls on api.* : logout and an auth-state check.
 
 export function logout() {
-  try { sessionStorage.removeItem('mp_profile'); } catch { /* ignore */ }
+  clearClientState();
   tokenManager.clearTokens();
   window.location.href = '/';
 }
@@ -126,9 +181,10 @@ export async function uploadDocument(file, docType = 'INVOICE') {
 
   const res = await fetch(`${BASE}/api/v1/documents/upload`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${getToken()}` },
+    headers: { Authorization: `Bearer ${await tokenManager.getValidAccessToken()}` },
     body: form,
   });
+  clearDataCache();
   return res.json();
 }
 
@@ -144,10 +200,10 @@ export async function uploadDataset(file, bankName = '') {
   }
   const res = await fetch(`${BASE}/api/v1/reconciliation/dataset-upload`, {
     method: 'POST',
-    headers: authHeaders(),
+    headers: await authHeaders(),
     body: JSON.stringify({ fileName: file.name, bankName, rows }),
   });
-  recentGets.clear();
+  clearDataCache();
   return res.json();
 }
 
@@ -157,9 +213,10 @@ export async function uploadBankCSV(file, bankName = '') {
   form.append('file', file);
   const res = await fetch(`${BASE}/api/v1/reconciliation/bank-csv-upload?bank_name=${encodeURIComponent(bankName)}`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${getToken()}` },
+    headers: { Authorization: `Bearer ${await tokenManager.getValidAccessToken()}` },
     body: form,
   });
+  clearDataCache();
   return res.json();
 }
 
@@ -178,7 +235,7 @@ export async function resolveAnomaly(anomalyId) {
 
 // ── Dashboard insights (ITC risk, vendor follow-up, filing deadlines) ─────────
 export async function getDashboardInsights() {
-  return request('GET', '/api/v1/dashboard/insights');
+  return request('GET', '/api/v1/reconciliation/dashboard-insights');
 }
 
 // ── Missing invoice detection ─────────────────────────────────────────────────
@@ -192,7 +249,7 @@ export async function detectMissingInvoices() {
 export async function downloadReconciliationReport() {
   const res = await fetch(`${BASE}/api/v1/reconciliation/export`, {
     method: 'GET',
-    headers: authHeaders(),
+    headers: await authHeaders(),
   });
   if (!res.ok) return false;
   const blob = await res.blob();
@@ -291,8 +348,9 @@ export async function reverifyTaxIdentifier(taxIdentifierId) {
 export async function deleteTaxIdentifier(taxIdentifierId) {
   const res = await fetch(`${BASE}/api/v1/tax-identifiers/${taxIdentifierId}`, {
     method: 'DELETE',
-    headers: authHeaders(),
+    headers: await authHeaders(),
   });
+  clearDataCache();
   return res.status === 204;
 }
 
@@ -317,8 +375,9 @@ export async function reverifyBankAccount(bankAccountId) {
 export async function unlinkBankAccount(bankAccountId) {
   const res = await fetch(`${BASE}/api/v1/bank-accounts/${bankAccountId}`, {
     method: 'DELETE',
-    headers: authHeaders(),
+    headers: await authHeaders(),
   });
+  clearDataCache();
   return res.status === 204;
 }
 

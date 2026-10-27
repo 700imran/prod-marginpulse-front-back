@@ -1,3 +1,4 @@
+import { invalidateTenantCache } from "../auth/supabase";
 import { Hono } from "hono";
 import type { Env } from "../config";
 import type { Sql } from "../db";
@@ -88,6 +89,7 @@ adminRoutes.patch("/tenants/:id/active", async (c) => {
   const tenantId = c.req.param("id");
   if (!/^[0-9a-f-]{36}$/i.test(tenantId)) return c.json({ error: "invalid tenant id" }, 400);
   await setTenantActive(c.get("sql"), tenantId, Boolean(is_active));
+  invalidateTenantCache(tenantId);
   const updated = await getTenantById(c.get("sql"), tenantId);
   if (!updated) return c.json({ error: "tenant not found" }, 404);
   return c.json(updated);

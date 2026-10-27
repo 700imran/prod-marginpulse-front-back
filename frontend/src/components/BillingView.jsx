@@ -41,7 +41,7 @@ async function loadRazorpayScript() {
 }
 
 export async function startPayment(planId) {
-  const token = getAccessToken();
+  const token = await tokenManager.getValidAccessToken();
 
   if (!token) {
     alert("Please log in before starting a payment.");

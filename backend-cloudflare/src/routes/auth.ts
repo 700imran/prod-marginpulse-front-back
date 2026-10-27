@@ -1,3 +1,4 @@
+import { invalidateTenantCache } from "../auth/supabase";
 import { Hono } from "hono";
 import type { Env } from "../config";
 import type { Sql } from "../db";
@@ -33,6 +34,7 @@ authRoutes.patch("/me", async (c) => {
   const patch = pickValid(await c.req.json().catch(() => null), PROFILE_SCHEMA);
   const tenant = c.get("tenant");
   const updated = await updateTenantProfile(c.get("sql"), tenant.tenantId, patch);
+  invalidateTenantCache(tenant.tenantId);
   await appendAuditLog(c.get("sql"), {
     tenantId: tenant.tenantId,
     entityType: "TENANT",

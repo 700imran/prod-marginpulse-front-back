@@ -18,18 +18,32 @@
  */
 import { supabase } from '../supabaseClient';
 
+// supabase-js persists the session in localStorage under sb-<project-ref>-auth-token
+// but only exposes it through an ASYNC call. Reading the same key synchronously
+// means the token (and the user's name) exist from the very first render, so the
+// first API calls after a page refresh carry a valid token instead of going out
+// anonymous, bouncing off a 401 and paying for a Supabase refresh round trip.
+function readPersistedSession() {
+  try {
+    const ref = new URL(process.env.REACT_APP_SUPABASE_URL || '').hostname.split('.')[0];
+    const raw = localStorage.getItem(`sb-${ref}-auth-token`);
+    const s = raw ? JSON.parse(raw) : null;
+    return s?.access_token ? s : null;
+  } catch {
+    return null;
+  }
+}
+
 class TokenManager {
   constructor() {
     this.listeners = [];
     this.onTokenStateChange = null;
-    this.currentSession = null;
+    this.currentSession = readPersistedSession();
 
-    // Seed the cache immediately (supabase-js reads its persisted
-    // session from localStorage synchronously internally, but only
-    // exposes it via this async call), then keep it in sync.
-    supabase.auth.getSession().then(({ data }) => {
-      this.currentSession = data?.session ?? null;
-    });
+    // Reconcile with supabase-js (this is also what refreshes an expired token).
+    this.ready = supabase.auth.getSession().then(({ data }) => {
+      this.currentSession = data?.session ?? this.currentSession;
+    }).catch(() => {});
     supabase.auth.onAuthStateChange((event, session) => {
       this.currentSession = session;
       if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') this.notifyStateChange('LOGIN');
@@ -49,6 +63,31 @@ class TokenManager {
 
   getAccessToken() {
     return this.currentSession?.access_token || '';
+  }
+
+  /**
+   * A token that is valid RIGHT NOW. Returns synchronously-available tokens
+   * immediately; only waits (for supabase-js to refresh) when the stored one
+   * is missing or about to expire — never sends a doomed request.
+   */
+  async getValidAccessToken() {
+    const exp = this.currentSession?.expires_at;
+    if (this.currentSession?.access_token && exp && exp * 1000 - Date.now() > 10000) {
+      return this.currentSession.access_token;
+    }
+    await this.ready;
+    try {
+      const { data } = await supabase.auth.getSession(); // refreshes if expired
+      this.currentSession = data?.session ?? this.currentSession;
+    } catch { /* fall through with whatever we have */ }
+    return this.currentSession?.access_token || '';
+  }
+
+  /** Best available human label before the API answers (display only, never trusted). */
+  getUserLabel() {
+    const u = this.currentSession?.user;
+    const m = u?.user_metadata || {};
+    return m.full_name || m.name || m.business_name || (u?.email ? u.email.split('@')[0] : '');
   }
 
   getRefreshToken() {
