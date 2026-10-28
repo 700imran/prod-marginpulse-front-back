@@ -41,6 +41,21 @@ jobs:
         run: "! grep -q '<script>' build/index.html"
       - run: npm audit --omit=dev --audit-level=high
 
+  observability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Prometheus rules + alert unit tests (promtool)
+        run: |
+          docker run --rm --entrypoint promtool -v "$PWD/observability:/w" -w /w prom/prometheus:v3.15.1 check rules alert-rules.yml
+          docker run --rm --entrypoint promtool -v "$PWD/observability:/w" -w /w prom/prometheus:v3.15.1 test rules alert-tests.yml
+      - name: Dashboard JSON is valid
+        run: python3 -c "import json;d=json.load(open('observability/grafana/dashboards/marginpulse.json'));assert len(d['panels'])>10;print('ok',len(d['panels']),'panels')"
+      - name: Probe detects healthy and broken systems
+        run: node --test observability/probe.test.mjs
+
   secret-scan:
     runs-on: ubuntu-latest
     steps:

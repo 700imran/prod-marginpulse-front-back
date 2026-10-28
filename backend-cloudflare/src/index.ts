@@ -4,6 +4,8 @@ import type { Env } from "./config";
 import type { Sql } from "./db";
 import type { TenantContext } from "./auth/supabase";
 import { withDb } from "./middleware/db";
+import { telemetry, telemetryRoutes } from "./observability/telemetry";
+import { emit } from "./observability/events";
 import { requestId, securityHeaders, corsMiddleware, requestSizeLimit } from "./middleware/security";
 import { rateLimit, isolateRateLimit } from "./middleware/rateLimit";
 import { ValidationError } from "./security/validate";
@@ -30,7 +32,7 @@ import { detectMissingInvoices } from "./pipelines/missingInvoice";
 
 export const app = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
-app.use("*", requestId, securityHeaders, corsMiddleware(), requestSizeLimit);
+app.use("*", requestId, telemetry, securityHeaders, corsMiddleware(), requestSizeLimit);
 // Abuse controls (before any DB work): generous per-IP ceiling everywhere,
 // tighter on public/unauthenticated and money endpoints.
 app.use("/api/*", isolateRateLimit(600, 60));
@@ -43,6 +45,8 @@ app.use("*", withDb);
 // health check sits outside /api/v1, same as the Go router
 app.route("/", healthRoutes);
 
+app.use("/api/v1/telemetry", isolateRateLimit(120, 60));
+app.route("/api/v1/telemetry", telemetryRoutes);
 app.route("/api/v1/auth", authRoutes);
 app.route("/api/v1/documents", documentRoutes);
 app.route("/api/v1/reconciliation", reconciliationRoutes);
@@ -70,6 +74,7 @@ app.post("/api/razorpay/webhook", async (c) => {
 
   const expected = await hmacSha256Hex(c.env.RAZORPAY_WEBHOOK_SECRET, body);
   if (!signature || !timingSafeEqual(expected, signature)) {
+    emit("webhook_rejected", { reason: "bad_signature", source: "razorpay" });
     return c.json({ error: "Invalid signature" }, 400);
   }
 

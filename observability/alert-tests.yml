@@ -1,0 +1,68 @@
+# promtool unit tests: prove the alerts fire when they should AND stay quiet when they shouldn't.
+#   promtool test rules alert-tests.yml
+rule_files: [alert-rules.yml]
+evaluation_interval: 1m
+tests:
+  - name: 5xx at ~6% fires ApiHighErrorRate
+    interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{http_response_status_code="200"}'
+        values: '0+94x30'
+      - series: 'http_server_request_duration_seconds_count{http_response_status_code="500"}'
+        values: '0+6x30'
+    alert_rule_test:
+      - { eval_time: 20m, alertname: ApiHighErrorRate, exp_alerts: [{ exp_labels: { severity: page }, exp_annotations: { summary: "More than 2% of API requests are failing with 5xx", runbook: "observability/README.md#runbook" } }] }
+
+  - name: 0.5% errors does NOT fire
+    interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{http_response_status_code="200"}'
+        values: '0+199x30'
+      - series: 'http_server_request_duration_seconds_count{http_response_status_code="500"}'
+        values: '0+1x30'
+    alert_rule_test:
+      - { eval_time: 20m, alertname: ApiHighErrorRate, exp_alerts: [] }
+
+  - name: six failed payment verifications in 15 minutes page
+    interval: 1m
+    input_series:
+      - series: 'marginpulse_events_total{event="payment",outcome="bad_signature"}'
+        values: '0 0 0 0 0 2 4 6 6 6 6 6 6 6 6'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: PaymentVerificationFailures
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations: { summary: "Several payment verifications failed in 15 min (bad signature, foreign order, unpaid or gateway error). Check Razorpay status and secrets." }
+
+  - name: successful payments never trigger the failure alert
+    interval: 1m
+    input_series:
+      - series: 'marginpulse_events_total{event="payment",outcome="verified"}'
+        values: '0+5x15'
+    alert_rule_test:
+      - { eval_time: 14m, alertname: PaymentVerificationFailures, exp_alerts: [] }
+
+  - name: sustained failed logins fire AuthFailureSpike
+    interval: 1m
+    input_series:
+      - series: 'marginpulse_events_total{event="auth_failed",reason="invalid_token"}'
+        values: '0+600x30'   # 10/s
+    alert_rule_test:
+      - { eval_time: 20m, alertname: AuthFailureSpike, exp_alerts: [{ exp_labels: { severity: warn }, exp_annotations: { summary: "Sustained failed-authentication traffic (possible token stuffing)" } }] }
+
+  - name: more than one browser JS error per minute fires
+    interval: 1m
+    input_series:
+      - series: 'marginpulse_events_total{event="js_error",kind="js",view="billing"}'
+        values: '0+3x40'
+    alert_rule_test:
+      - { eval_time: 30m, alertname: BrowserErrorsRising, exp_alerts: [{ exp_labels: { severity: warn }, exp_annotations: { summary: "More than 1 browser JS error per minute" } }] }
+
+  - name: silence for 20 minutes raises ApiNoTelemetry
+    interval: 1m
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{http_response_status_code="200"}'
+        values: '0+10x5 _x25'
+    alert_rule_test:
+      - { eval_time: 28m, alertname: ApiNoTelemetry, exp_alerts: [{ exp_labels: { severity: warn }, exp_annotations: { summary: "No API metrics received for 15 min: Worker down, no traffic, or the collector/OTLP secret is broken" } }] }

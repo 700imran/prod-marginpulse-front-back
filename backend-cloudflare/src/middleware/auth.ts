@@ -1,3 +1,4 @@
+import { emit } from "../observability/events";
 import type { MiddlewareHandler } from "hono";
 import type { Env } from "../config";
 import type { Sql } from "../db";
@@ -11,12 +12,14 @@ export const requireAuth: MiddlewareHandler<{ Bindings: Env; Variables: { sql: S
   const authHeader = c.req.header("Authorization") ?? "";
   const match = authHeader.match(/^Bearer (.+)$/);
   if (!match) {
+    emit("auth_failed", { reason: "missing_token" });
     return c.json({ error: "missing bearer token" }, 401);
   }
   let claims;
   try {
     claims = await verifySupabaseToken(c.env, match[1]!);
   } catch {
+    emit("auth_failed", { reason: "invalid_token" });
     return c.json({ error: "invalid or expired token" }, 401);
   }
 

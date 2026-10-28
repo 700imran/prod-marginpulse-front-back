@@ -1,0 +1,44 @@
+# Receives OTLP/HTTP pushed by the Cloudflare Worker, exposes metrics to Prometheus,
+# forwards traces to Tempo. Put TLS in front of :4318 (Cloudflare Tunnel / Caddy) — the
+# bearer token below is the only credential, so never expose it over plain HTTP.
+extensions:
+  bearertokenauth:
+    token: ${env:OTLP_AUTH_TOKEN}
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+        auth:
+          authenticator: bearertokenauth
+        max_request_body_size: 4194304   # 4 MiB cap
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 400
+  batch: {}
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    metric_expiration: 10m          # series from recycled Worker isolates disappear after 10 min
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  debug:
+    verbosity: basic
+
+service:
+  extensions: [bearertokenauth]
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo]

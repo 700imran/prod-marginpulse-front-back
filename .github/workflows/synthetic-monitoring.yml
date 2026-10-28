@@ -1,0 +1,30 @@
+name: Production probe
+
+# Black-box checks of the LIVE system every 10 minutes: health + latency, security headers, auth,
+# CORS, webhooks, and that the public Supabase anon key cannot read any tenant data (RLS).
+# A failing run notifies repo watchers; with OTLP secrets set it also feeds Grafana (probe_success).
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - name: Probe production
+        env:
+          API_URL: ${{ vars.API_URL || 'https://api.marginpulse.in' }}
+          APP_URL: ${{ vars.APP_URL || 'https://app.marginpulse.in' }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          OTLP_ENDPOINT: ${{ secrets.OTLP_ENDPOINT }}
+          OTLP_HEADERS: ${{ secrets.OTLP_HEADERS }}
+        run: node observability/probe.mjs

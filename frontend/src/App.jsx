@@ -7,6 +7,7 @@ import { useState, useEffect, useRef, useCallback, useTransition, lazy, Suspense
 import LoginPage from "./LoginPage";
 import { isLoggedIn, logout, getProfile, prefetchAppData } from "./api";
 import { tokenManager } from "./security/tokenManager";
+import { initRUM, startFeature, endFeature, markAppReady } from "./telemetry/rum";
 import { GLOBAL_CSS, Icons, NAV_SECTIONS, Toast } from "./theme";
 
 // Every screen is its own chunk, loaded only when navigated to — keeps
@@ -140,6 +141,10 @@ function AppShell() {
     };
   }, []);
 
+  // Real-user monitoring: Web Vitals, refresh-to-ready time, per-feature load time, JS errors.
+  useEffect(() => { initRUM(); markAppReady(); }, []);
+  useEffect(() => { endFeature(activeNav); }, [activeNav]);
+
   // Close the profile dropdown on outside click.
   useEffect(() => {
     function handleClick(e) {
@@ -159,7 +164,10 @@ function AppShell() {
   // Name → organisation → what the sign-in session already knows. Never "Loading…".
   const displayName = tenant?.displayName || tenant?.businessName || tokenManager.getUserLabel() || "My workspace";
   const orgName = tenant?.businessName && tenant.businessName !== displayName ? tenant.businessName : "";
-  const navigate = (id) => startTransition(() => setActiveNav(id)); // keep the current screen visible until the next is ready
+  const navigate = (id) => {
+    startFeature(id); // RUM: click → screen painted
+    startTransition(() => setActiveNav(id)); // keep the current screen visible until the next is ready
+  };
 
   function renderContent() {
     switch (activeNav) {

@@ -11,6 +11,7 @@ export interface Env {
   GST_QUEUE: Queue;
   TAX_IDENTIFIER_QUEUE: Queue;
   BANK_ACCOUNT_QUEUE: Queue;
+  METRICS?: AnalyticsEngineDataset; // optional: Workers Analytics Engine ([[analytics_engine_datasets]] in wrangler.toml)
 
   // --- plain vars (wrangler.toml [vars]) ---
   ENVIRONMENT: string;
@@ -25,6 +26,12 @@ export interface Env {
   FRONTEND_ORIGIN: string;
   INGEST_EMAIL_ADDRESS: string;
   AI_INSIGHTS_DAILY_BUDGET_USD: string;
+
+  // --- optional telemetry (all off unless set) ---
+  OTLP_ENDPOINT?: string;             // e.g. https://otlp-gateway-prod-ap-south-1.grafana.net/otlp  or your collector URL
+  OTLP_HEADERS?: string;              // "Authorization=Basic <base64 instanceId:token>" (secret)
+  TELEMETRY_SALT?: string;            // salt for hashing tenant ids in logs/traces (secret)
+  TRACE_SAMPLE_RATE?: string;         // 0..1, default 0.1 (errors and >1s requests are always traced)
 
   // --- secrets (`wrangler secret put <NAME>`) ---
   SUPABASE_JWT_SECRET: string;        // Settings > API > JWT Secret in Supabase

@@ -1,3 +1,4 @@
+import { emit } from "../observability/events";
 import { Hono } from "hono";
 import type { Env } from "../config";
 import type { Sql } from "../db";
@@ -177,6 +178,8 @@ reconciliationRoutes.post("/dataset-upload", rateLimit("dataset", 20, 60), async
   }
 
   const outcome = await reconcileTenant(sql, tenantId);
+  emit("dataset_upload", { type: data.datasetType.toLowerCase() });
+  emit("dataset_rows_imported", { type: data.datasetType.toLowerCase() }, created);
   await appendAuditLog(sql, { tenantId, entityType: "DATASET", entityId: crypto.randomUUID(), action: "DATASET_UPLOADED", reason: `${fileName} — ${data.datasetType}: ${created} rows`, actorEmail: c.get("tenant").ownerEmail });
   return c.json({ datasetType: data.datasetType, rowsRead: data.rowsRead, rowsImported: created, rowsSkipped: data.rowsSkipped, warnings: data.warnings, reconciliation: outcome }, 201);
 });

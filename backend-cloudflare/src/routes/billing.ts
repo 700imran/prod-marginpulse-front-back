@@ -1,3 +1,4 @@
+import { emit } from "../observability/events";
 import { Hono, type Context } from "hono";
 import type { Env } from "../config";
 import type { Sql } from "../db";
@@ -80,6 +81,7 @@ export const createOrderHandler = async (c: BillingCtx) => {
     return c.json({ error: "plan must be one of: starter, pro, enterprise" }, 400);
   }
   const planId: PlanId = body.plan;
+  emit("payment", { outcome: "order_requested", plan: planId });
   const amount = PLANS[planId].priceInr;
   const currency = "INR";
 
@@ -169,6 +171,7 @@ export const verifyPaymentHandler = async (c: BillingCtx) => {
   const text = `${razorpay_order_id}|${razorpay_payment_id}`;
   const expected = await hmacSha256Hex(c.env.RAZORPAY_KEY_SECRET, text);
   if (!timingSafeEqual(expected, String(razorpay_signature))) {
+    emit("payment", { outcome: "bad_signature" });
     return c.json({ error: "Signature mismatch" }, 400);
   }
 
@@ -179,7 +182,7 @@ export const verifyPaymentHandler = async (c: BillingCtx) => {
   try {
     const auth = btoa(`${c.env.RAZORPAY_KEY_ID}:${c.env.RAZORPAY_KEY_SECRET}`);
     const r = await fetchWithTimeout(`https://api.razorpay.com/v1/orders/${encodeURIComponent(String(razorpay_order_id))}`, { headers: { Authorization: `Basic ${auth}` } }, 10000);
-    if (!r.ok) return c.json({ error: "Could not confirm the order with Razorpay" }, 502);
+    if (!r.ok) { emit("payment", { outcome: "gateway_error" }); return c.json({ error: "Could not confirm the order with Razorpay" }, 502); }
     order = (await r.json()) as typeof order;
   } catch (e) {
     console.error("razorpay:order_fetch_failed", (e as Error).message);
@@ -188,9 +191,11 @@ export const verifyPaymentHandler = async (c: BillingCtx) => {
   const planId = order.notes?.plan;
   if (order.notes?.tenantId !== tenant.tenantId || !isPlanId(planId)) {
     console.error("razorpay:order_owner_mismatch", { orderId: order.id, tenantId: tenant.tenantId });
+    emit("payment", { outcome: "owner_mismatch" });
     return c.json({ error: "This order does not belong to your account" }, 403);
   }
   if (order.status !== "paid" || order.currency !== "INR" || order.amount !== PLANS[planId].priceInr * 100 || (order.amount_paid ?? order.amount) !== order.amount) {
+    emit("payment", { outcome: "not_paid" });
     return c.json({ error: "Payment not completed for the full plan amount" }, 402);
   }
 
@@ -216,6 +221,7 @@ export const verifyPaymentHandler = async (c: BillingCtx) => {
   }
   console.log("razorpay:payment_verified", { orderId: order.id, paymentId: razorpay_payment_id, tenantId: tenant.tenantId, planTier: applied ? newTier : tenant.planTier });
 
+  emit("payment", { outcome: "verified", plan: planId });
   return c.json({ status: "verified", orderId: order.id, paymentId: razorpay_payment_id, planTier: applied ? newTier : tenant.planTier });
 };
 billingRoutes.post("/verify-payment", verifyPaymentHandler);

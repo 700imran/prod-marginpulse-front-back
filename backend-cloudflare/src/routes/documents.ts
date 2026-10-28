@@ -1,3 +1,4 @@
+import { emit } from "../observability/events";
 import { Hono } from "hono";
 import type { Env } from "../config";
 import type { Sql } from "../db";
@@ -72,6 +73,7 @@ documentRoutes.post("/upload", rateLimit("upload", 40, 60), async (c) => {
   await finalizeOcrResult(c.env, sql, tenant.tenantId, doc.documentId, result);
 
   const updatedDoc = await getDocumentById(sql, tenant.tenantId, doc.documentId);
+  emit("document_upload", { outcome: "ok" });
   return c.json({ ...(updatedDoc ?? doc), storageKey }, 201);
 });
 

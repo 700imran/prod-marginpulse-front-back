@@ -1,3 +1,4 @@
+import { emit } from "../observability/events";
 import { Hono } from "hono";
 import type { Env } from "../config";
 import type { Sql } from "../db";
@@ -69,6 +70,7 @@ webhookRoutes.post("/whatsapp", async (c) => {
     const valid = await verifyMetaSignature256(c.env.WHATSAPP_APP_SECRET, rawBody, c.req.header("X-Hub-Signature-256") ?? null);
     if (!valid) {
       console.warn("whatsapp webhook: signature verification failed, rejecting");
+      emit("webhook_rejected", { reason: "bad_signature", source: "whatsapp" });
       return c.json({ error: "Invalid signature" }, 401);
     }
   } else {
@@ -125,7 +127,7 @@ webhookRoutes.post("/whatsapp", async (c) => {
 webhookRoutes.post("/email-ingest", async (c) => {
   // Secret is MANDATORY (was optional: an unset secret left this endpoint wide open).
   if (!c.env.WEBHOOK_INGEST_SECRET) return c.json({ error: "webhook not configured" }, 503);
-  if (!(await constantTimeEqual(c.req.header("X-Webhook-Secret") ?? "", c.env.WEBHOOK_INGEST_SECRET))) return c.json({ error: "Invalid webhook secret" }, 401);
+  if (!(await constantTimeEqual(c.req.header("X-Webhook-Secret") ?? "", c.env.WEBHOOK_INGEST_SECRET))) { emit("webhook_rejected", { reason: "bad_secret", source: "email_ingest" }); return c.json({ error: "Invalid webhook secret" }, 401); }
 
   const payload = await c.req.json<{ to: string; from: string; attachments: { filename: string; content_type: string; content_base64: string }[] }>().catch(() => null);
   if (!payload || typeof payload.to !== "string") return c.json({ error: "invalid payload" }, 400);

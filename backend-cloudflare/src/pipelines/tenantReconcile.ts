@@ -1,3 +1,4 @@
+import { emit } from "../observability/events";
 import type { Sql } from "../db";
 import { reconcileBatch, type Invoice, type BankRow } from "./reconciliation";
 import { listByStatus, updateDocumentFields } from "../repository/documents";
@@ -41,5 +42,8 @@ export async function reconcileTenant(sql: Sql, tenantId: string): Promise<{ rec
       });
     }
   }
+  emit("reconciliation_run", { outcome: "reconciled" }, tally.reconciled);
+  emit("reconciliation_run", { outcome: "review" }, tally.review);
+  emit("reconciliation_run", { outcome: "unmatched" }, tally.unmatched);
   return tally;
 }

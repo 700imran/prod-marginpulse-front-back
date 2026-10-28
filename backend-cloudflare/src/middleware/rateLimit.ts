@@ -1,3 +1,4 @@
+import { emit } from "../observability/events";
 import type { MiddlewareHandler } from "hono";
 import type { Env } from "../config";
 import { checkRateLimit } from "../ratelimit";
@@ -15,9 +16,11 @@ export function rateLimit(bucket: string, limit: number, windowSeconds: number, 
       c.header("X-RateLimit-Remaining", String(remaining));
       if (!allowed) {
         c.header("Retry-After", String(windowSeconds));
+        emit("rate_limited", { limiter: bucket });
         return c.json({ error: "rate limit exceeded, try again shortly" }, 429);
       }
     } catch (e) {
+      emit("ratelimit_backend_error", { limiter: bucket });
       console.error("ratelimit_backend_error", { bucket, error: (e as Error).message });
       if (opts.failClosed) return c.json({ error: "service temporarily unavailable" }, 503);
     }
@@ -41,6 +44,7 @@ export function isolateRateLimit(limit: number, windowSeconds: number): Middlewa
     }
     if (++b.n > limit) {
       c.header("Retry-After", String(Math.ceil((b.reset - now) / 1000)));
+      emit("rate_limited", { limiter: "isolate" });
       return c.json({ error: "rate limit exceeded, try again shortly" }, 429);
     }
     await next();

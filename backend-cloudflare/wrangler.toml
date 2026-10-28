@@ -93,6 +93,18 @@ crons = ["0 3 * * *"]  # daily: detect-missing-invoices sweep across tenants
 #   WHATSAPP_VERIFY_TOKEN, WHATSAPP_ACCESS_TOKEN, WHATSAPP_APP_SECRET,
 #   WEBHOOK_INGEST_SECRET
 # ---------------------------------------------------------------------------
+# Workers Logs: every console.log JSON line (request id, route, status, ms, hashed tenant) is
+# indexed and searchable in the Cloudflare dashboard. No PII is logged (see observability/README.md).
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# Optional — Workers Analytics Engine (SQL over per-request data points, queryable from Grafana).
+# Enable "Analytics Engine" once in the Cloudflare dashboard, then uncomment:
+# [[analytics_engine_datasets]]
+# binding = "METRICS"
+# dataset = "marginpulse_metrics"
+
 [vars]
 ENVIRONMENT = "production"
 SUPABASE_URL = "https://nseurvhbqkdlemcfoixt.supabase.co"
