@@ -107,6 +107,9 @@ head_sampling_rate = 1
 
 [vars]
 ENVIRONMENT = "production"
+# Cloudflare Turnstile PUBLIC site key (dashboard → Turnstile). Empty = captcha off. Also set the secret:
+#   wrangler secret put TURNSTILE_SECRET
+TURNSTILE_SITE_KEY = ""
 SUPABASE_URL = "https://nseurvhbqkdlemcfoixt.supabase.co"
 UPSTASH_REDIS_REST_URL = "https://above-rat-197792.upstash.io"
 GST_API_BASE_URL = "https://REPLACE-gst-portal-provider.example.com"

@@ -124,7 +124,9 @@ before(() => { globalThis.fetch = (async () => new Response(JSON.stringify({ res
 after(() => { globalThis.fetch = realFetch; });
 
 // Public by design: ROI calculator (pure arithmetic) and the Slack OAuth redirect target (protected by a one-time CSRF state).
-const PUBLIC = new Set(["/api/v1/roi", "/api/v1/roi/", "/api/v1/integrations/slack/callback"]);
+// Intentionally public: ROI (guarded by Turnstile for anonymous callers), OAuth callback, and the login screen's
+// captcha site-key lookup (public value only, covered by turnstile.test.ts).
+const PUBLIC = new Set(["/api/v1/roi", "/api/v1/roi/", "/api/v1/integrations/slack/callback", "/api/v1/config/public"]);
 test("every /api/v1 route rejects requests without a bearer token (401)", async () => {
   const routes = app.routes.filter((r) => r.path.startsWith("/api/v1") && r.method !== "ALL" && !PUBLIC.has(r.path));
   assert.ok(routes.length > 30, `expected many routes, got ${routes.length}`);

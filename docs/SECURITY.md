@@ -26,6 +26,7 @@ that suite and part of the CI gate that blocks deploys.
 | Cryptography | AES-256-GCM field encryption with random 12-byte IV for bank accounts and integration credentials | `security/fieldEncryption.ts` |
 | Transport / browser | HSTS, strict CSP (API: `default-src 'none'`; app: no inline scripts, explicit origins), `frame-ancestors 'none'`, nosniff, Referrer/Permissions policy, `Cache-Control: no-store`, CORS allow-list with `Vary: Origin` | `middleware/security.ts`, `frontend/vercel.json`, `frontend/public/_headers`; `security.test.ts` |
 | Supply chain | OCR engine/WASM served from our own origin (no runtime CDN code); legacy URL-fragment token login removed; runtime dependency audit = 0 known vulnerabilities; Dependabot weekly | `frontend/scripts/copy-ocr-assets.js`, `.github/dependabot.yml` |
+| Bot protection | Cloudflare Turnstile: widget on sign-in / sign-up (token verified by Supabase Auth); Worker verifies tokens server-side for public API routes, pinning hostname + action, fail-closed if Cloudflare is unreachable; site key served from the backend, secret never leaves the Worker | `security/turnstile.ts`; `turnstile.test.ts`, `LoginPage.captcha.test.js` |
 | Abuse protection | Per-isolate limiter on every request + Upstash limiter on billing (fail-closed), ROI, webhooks, dataset upload | `middleware/rateLimit.ts` |
 | Error handling | Generic JSON errors with a request id; no stack traces; health endpoint discloses nothing | `security.test.ts` |
 | Change management | CI blocks deploys unless typecheck, tests and `npm audit` (high+) pass; weekly scheduled audit; CodeQL; full-history secret scan | `.github/workflows/` |
@@ -37,7 +38,8 @@ that suite and part of the CI gate that blocks deploys.
 3. Set Worker secrets (`wrangler secret put`): `FIELD_ENCRYPTION_KEY` (32 random bytes, base64), `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`, `WHATSAPP_APP_SECRET`, `WEBHOOK_INGEST_SECRET`, Upstash credentials. Webhooks refuse requests until their secret exists.
 4. In Supabase Auth: enable email confirmation, set minimum password length/strength, and turn on MFA (TOTP) for platform admins.
 5. Set `FRONTEND_ORIGIN` to the exact production origin(s). If the API is not served from `api.marginpulse.in` or Supabase is not on `*.supabase.co`, update `connect-src` in `frontend/vercel.json` and `frontend/public/_headers`, or the browser will block those calls.
-6. Enable Supabase backups / point-in-time recovery and test a restore; enable branch protection and required status checks on `main`.
+6. **Turn on Turnstile** (off until configured — nothing breaks meanwhile): create a Turnstile widget in the Cloudflare dashboard (allowed hostname = your app host), then `wrangler secret put TURNSTILE_SECRET` and set `TURNSTILE_SITE_KEY` in `wrangler.toml`. **In the same step** enable Supabase → Authentication → Attack Protection → CAPTCHA → Turnstile with the same secret; that is what actually protects sign-in/sign-up (they talk to Supabase directly, not through the Worker). The marketing-site ROI form must also send an `X-Turnstile-Token` header (action `roi`) once the secret is set; signed-in dashboard users are exempt.
+7. Enable Supabase backups / point-in-time recovery and test a restore; enable branch protection and required status checks on `main`.
 
 ## 3. Known gaps (honest list)
 

@@ -4,6 +4,7 @@ import type { Env } from "./config";
 import type { Sql } from "./db";
 import type { TenantContext } from "./auth/supabase";
 import { withDb } from "./middleware/db";
+import { publicConfigRoutes } from "./routes/publicConfig";
 import { telemetry, telemetryRoutes } from "./observability/telemetry";
 import { emit } from "./observability/events";
 import { requestId, securityHeaders, corsMiddleware, requestSizeLimit } from "./middleware/security";
@@ -47,6 +48,7 @@ app.route("/", healthRoutes);
 
 app.use("/api/v1/telemetry", isolateRateLimit(120, 60));
 app.route("/api/v1/telemetry", telemetryRoutes);
+app.route("/api/v1/config", publicConfigRoutes);
 app.route("/api/v1/auth", authRoutes);
 app.route("/api/v1/documents", documentRoutes);
 app.route("/api/v1/reconciliation", reconciliationRoutes);

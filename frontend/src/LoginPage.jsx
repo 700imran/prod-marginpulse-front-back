@@ -18,6 +18,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 import { validateEmail, validatePassword, validateBusinessName, validateDisplayName, validatePhoneNumber } from "./security/inputValidator";
 import { ERROR_MESSAGES } from "./security/errorHandler";
+import { useCaptcha, CaptchaField } from "./security/Turnstile";
 
 const API_BASE = process.env.REACT_APP_API_URL || "";
 
@@ -515,6 +516,7 @@ function OAuthButtons() {
  * Login form component
  */
 function LoginForm({ onSuccess }) {
+  const captcha = useCaptcha("login");
   const [form, setForm] = useState({ email: "", password: "" });
   const [errors, setErrors] = useState({});
   const [submitting, setSubmitting] = useState(false);
@@ -564,16 +566,23 @@ function LoginForm({ onSuccess }) {
       return;
     }
 
+    if (captcha.required) {
+      setApiError("Please complete the security check.");
+      return;
+    }
+
     setSubmitting(true);
 
     const { data, error } = await supabase.auth.signInWithPassword({
       email: form.email.trim().toLowerCase(),
       password: form.password,
+      ...(captcha.token ? { options: { captchaToken: captcha.token } } : {}),
     });
 
     setSubmitting(false);
 
     if (error || !data?.session) {
+      captcha.reset(); // a captcha token is single-use — fetch a fresh one for the next attempt
       setApiError(error?.message || ERROR_MESSAGES.GENERIC_ERROR);
       return;
     }
@@ -621,10 +630,12 @@ function LoginForm({ onSuccess }) {
         required
       />
 
+      <CaptchaField captcha={captcha} />
+
       <button
         type="submit"
         className="mp-auth-btn mp-auth-btn-primary"
-        disabled={submitting}
+        disabled={submitting || captcha.pending || captcha.required}
         aria-busy={submitting}
       >
         {submitting ? (
@@ -648,6 +659,7 @@ function LoginForm({ onSuccess }) {
  * Register form component
  */
 function RegisterForm({ onSuccess }) {
+  const captcha = useCaptcha("signup");
   const [form, setForm] = useState({
     businessName: "",
     email: "",
@@ -714,6 +726,11 @@ function RegisterForm({ onSuccess }) {
       return;
     }
 
+    if (captcha.required) {
+      setApiError("Please complete the security check.");
+      return;
+    }
+
     setSubmitting(true);
 
     const { data, error } = await supabase.auth.signUp({
@@ -721,12 +738,14 @@ function RegisterForm({ onSuccess }) {
       password: form.password,
       options: {
         data: { business_name: form.businessName.trim(), country_code: form.countryCode },
+        ...(captcha.token ? { captchaToken: captcha.token } : {}),
       },
     });
 
     setSubmitting(false);
 
     if (error) {
+      captcha.reset(); // single-use token
       setApiError(error.message || ERROR_MESSAGES.GENERIC_ERROR);
       return;
     }
@@ -831,10 +850,12 @@ function RegisterForm({ onSuccess }) {
         </select>
       </div>
 
+      <CaptchaField captcha={captcha} />
+
       <button
         type="submit"
         className="mp-auth-btn mp-auth-btn-primary"
-        disabled={submitting}
+        disabled={submitting || captcha.pending || captcha.required}
         aria-busy={submitting}
       >
         {submitting ? (

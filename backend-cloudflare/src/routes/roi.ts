@@ -1,11 +1,22 @@
 import { Hono } from "hono";
 import type { Env } from "../config";
+import { requireCaptcha } from "../security/turnstile";
+import { verifySupabaseToken } from "../auth/supabase";
 
 // Deliberately unauthenticated — no requireAuth here, matching the Go
 // original's own comment: meant to sit on the public marketing site as
 // well as inside the logged-in dashboard. Pure arithmetic, no
 // persistence, nothing worth rate-limiting.
 export const roiRoutes = new Hono<{ Bindings: Env }>();
+
+// Signed-in users (the dashboard) skip the challenge; anonymous callers (marketing site) must pass Turnstile.
+roiRoutes.use("*", requireCaptcha("roi", {
+  skipIf: async (c) => {
+    const h = c.req.header("Authorization") ?? "";
+    if (!h.startsWith("Bearer ")) return false;
+    try { await verifySupabaseToken(c.env, h.slice(7)); return true; } catch { return false; }
+  },
+}));
 
 const ITC_LEAKAGE_RATE_PERCENT_DEFAULT = 8.0;
 const TIME_SAVED_PERCENT_DEFAULT = 70.0;

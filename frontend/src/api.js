@@ -129,6 +129,18 @@ export function prefetchAppData() {
   })();
 }
 
+// ── Public config (no auth: the login screen needs it before anyone is signed in) ──
+let publicConfigPromise = null;
+export function getPublicConfig() {
+  if (!publicConfigPromise) {
+    publicConfigPromise = fetch(`${BASE}/api/v1/config/public`, { signal: AbortSignal.timeout(6000) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((c) => c || { captcha: { enabled: false } })
+      .catch(() => { publicConfigPromise = null; return { captcha: { enabled: false } }; }); // retry next time; never block login on it
+  }
+  return publicConfigPromise;
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 // Sign-in/sign-up themselves live in LoginPage.jsx, calling Supabase
 // directly (supabase.auth.signInWithPassword / signUp) — there's no
@@ -286,7 +298,7 @@ export async function getAuditLog(entityType, entityId, limit = 100) {
 
 // ── ROI calculator (public — no auth required, works for marketing site too) ─
 export async function calculateROI(payload) {
-  return request('POST', '/api/v1/roi-calculator', payload);
+  return request('POST', '/api/v1/roi', payload);
 }
 
 // ── GST ───────────────────────────────────────────────────────────────────────

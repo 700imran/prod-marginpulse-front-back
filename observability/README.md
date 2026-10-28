@@ -22,6 +22,7 @@ counters and pushes them with its own `service.instance.id`; dashboards use `sum
 | Every API request | `http_server_request_duration_seconds` (route **pattern**, method, status, plan) | rate, errors, p50/p95/p99 per route and per plan |
 | Payments | `marginpulse_events_total{event="payment",outcome=...}` | verified vs bad_signature / owner_mismatch / not_paid / gateway_error |
 | Security | `auth_failed`, `rate_limited`, `webhook_rejected` | stuffing / probing / misconfiguration |
+| Captcha | `marginpulse_events_total{event="captcha",outcome=passed\|rejected\|unavailable\|skipped_*,action}` | bot pressure; `skipped_unconfigured` means Turnstile is still off |
 | Data pipeline | `document_upload`, `dataset_upload`, `dataset_rows_imported`, `reconciliation_run{outcome}` | throughput and match quality |
 | Refresh speed | `marginpulse_web_vital_milliseconds{name="APP_READY"}` | time from page load to usable app (target: < 1 s) |
 | Feature speed | `marginpulse_feature_load_milliseconds{view,temp}` | click → screen painted, cold vs warm, per screen |

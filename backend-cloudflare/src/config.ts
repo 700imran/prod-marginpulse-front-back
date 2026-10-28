@@ -27,6 +27,9 @@ export interface Env {
   INGEST_EMAIL_ADDRESS: string;
   AI_INSIGHTS_DAILY_BUDGET_USD: string;
 
+  TURNSTILE_SITE_KEY?: string;        // public Turnstile site key (var). Empty = captcha disabled
+  TURNSTILE_SECRET?: string;          // Turnstile secret key (`wrangler secret put TURNSTILE_SECRET`)
+
   // --- optional telemetry (all off unless set) ---
   OTLP_ENDPOINT?: string;             // e.g. https://otlp-gateway-prod-ap-south-1.grafana.net/otlp  or your collector URL
   OTLP_HEADERS?: string;              // "Authorization=Basic <base64 instanceId:token>" (secret)

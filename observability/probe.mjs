@@ -56,6 +56,18 @@ if (API) {
     const r = await get(`${API}/api/v1/telemetry`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"events":[]}' });
     must(r.status === 401, `expected 401, got ${r.status}`);
   });
+  await check('api: public config exposes only public values; captcha challenges anonymous callers', async () => {
+    const r = await get(`${API}/api/v1/config/public`);
+    must(r.status === 200, `status ${r.status}`);
+    const txt = await r.text();
+    must(!/secret|private|password|service_role/i.test(txt), 'public config contains a secret-looking field');
+    const cfg = JSON.parse(txt);
+    if (!cfg.captcha?.enabled) return 'captcha OFF (enable Turnstile before launch)';
+    must(typeof cfg.captcha.siteKey === 'string' && cfg.captcha.siteKey.length > 8, 'captcha enabled but no site key');
+    const roi = await get(`${API}/api/v1/roi`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    must(roi.status === 403, `anonymous ROI call was not challenged (HTTP ${roi.status})`);
+    return 'captcha ON, anonymous ROI blocked';
+  });
   await check('api: webhooks refuse unsigned calls', async () => {
     for (const p of ['/api/v1/webhooks/email-ingest', '/api/v1/billing/webhook']) {
       const r = await get(`${API}${p}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });

@@ -13,6 +13,8 @@ test('healthy system passes every check', async () => {
     const origin = req.headers.origin;
     if (req.method === 'OPTIONS') { res.writeHead(204, { ...(origin === 'https://app.test' ? { 'access-control-allow-origin': origin } : {}) }); return res.end(); }
     if (req.url === '/health') { res.writeHead(200, SEC); return res.end('{"status":"ok"}'); }
+    if (req.url === '/api/v1/config/public') { res.writeHead(200, SEC); return res.end('{"captcha":{"provider":"turnstile","enabled":true,"siteKey":"1x00000000000000000000AA"}}'); }
+    if (req.url === '/api/v1/roi') { res.writeHead(403, SEC); return res.end('{"captcha":true}'); }
     if (req.url.startsWith('/api/v1/webhooks') || req.url.startsWith('/api/v1/billing/webhook')) { res.writeHead(401); return res.end(); }
     res.writeHead(401, SEC); res.end('{}');
   });
@@ -25,6 +27,7 @@ test('healthy system passes every check', async () => {
   assert.match(r.out, /PASS .*\/health/);
   assert.match(r2.out, /PASS .*app: loads with CSP/);
   assert.match(r2.out, /PASS .*RLS — anon key cannot read/);
+  assert.match(r.out, /PASS .*captcha challenges anonymous/);
 });
 
 test('broken system fails loudly: open endpoints, missing headers, leaking database, evil CORS', async () => {
@@ -40,6 +43,7 @@ test('broken system fails loudly: open endpoints, missing headers, leaking datab
   assert.match(r.out, /FAIL .*protected route rejects anonymous/);
   assert.match(r.out, /FAIL .*forged token/);
   assert.match(r.out, /FAIL .*CORS/);
+  assert.match(r.out, /FAIL .*public config/);
   assert.match(r.out, /FAIL .*RLS — anon key cannot read/);
   assert.match(r.out, /run db\/002_security_hardening.sql/);
 });
