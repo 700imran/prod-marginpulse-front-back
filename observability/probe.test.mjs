@@ -33,6 +33,7 @@ test('healthy system passes every check', async () => {
 test('broken system fails loudly: open endpoints, missing headers, leaking database, evil CORS', async () => {
   const api = await server((req, res) => {
     if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*' }); return res.end(); }
+    if (req.url === '/api/v1/config/public') { res.writeHead(200); return res.end('{"captcha":{"enabled":true,"siteKey":"1x00000000000000000000AA","secret":"0x4AAAAAAA-leaked"}}'); } // leaks the secret
     res.writeHead(200); res.end('{"ok":true}');   // no security headers, auth route open
   });
   const sb = await server((req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end('[{"tenant_id":"leak"}]'); }); // RLS off
