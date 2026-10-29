@@ -22,6 +22,8 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: npm test
+      - name: Boot the Worker in the real Workers runtime (workerd)
+        run: npm run boot-check
       - run: npm audit --omit=dev --audit-level=high
 
   frontend:

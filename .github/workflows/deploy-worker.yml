@@ -42,6 +42,10 @@ jobs:
       - name: Tests (security, tenant isolation, billing, reconciliation accuracy)
         run: npm test
 
+      # tsc and unit tests cannot see startup-only failures (e.g. random values in global scope); this can.
+      - name: Boot check (real Workers runtime)
+        run: npm run boot-check
+
       - name: Dependency audit (fail on high/critical)
         run: npm audit --omit=dev --audit-level=high
 

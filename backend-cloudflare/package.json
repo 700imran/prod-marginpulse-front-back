@@ -8,7 +8,8 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "db:migrate": "node --experimental-strip-types scripts/migrate.ts",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts",
+    "boot-check": "bash scripts/boot-check.sh"
   },
   "dependencies": {
     "hono": "^4.13.14",

@@ -23,8 +23,13 @@ interface Hist { name: string; unit: string; bounds: number[]; attrs: Attrs; cou
 const attrKey = (name: string, a: Attrs) => name + "|" + Object.keys(a).sort().map((k) => `${k}=${a[k]}`).join(",");
 
 export class Registry {
-  readonly instanceId = crypto.randomUUID();
-  readonly startNs = BigInt(Date.now()) * 1_000_000n;
+  // Workers forbid random values in GLOBAL scope (this object is created at module load, and
+  // `crypto.randomUUID()` there makes the Worker fail to start: "Disallowed operation called within
+  // global scope"). So both are created lazily, on first use inside a request handler.
+  private _id: string | undefined;
+  private _start: bigint | undefined;
+  get instanceId(): string { return (this._id ??= crypto.randomUUID()); }
+  get startNs(): bigint { return (this._start ??= BigInt(Date.now()) * 1_000_000n); }
   counters = new Map<string, Counter>();
   hists = new Map<string, Hist>();
   spans: Span[] = [];
@@ -35,6 +40,7 @@ export class Registry {
     const k = attrKey(name, attrs);
     const c = this.counters.get(k);
     if (c) c.value += by; else this.counters.set(k, { name, attrs, value: by });
+    void this.startNs;
     this.dirty++;
   }
 
@@ -47,6 +53,7 @@ export class Registry {
     let i = 0;
     while (i < bounds.length && value > bounds[i]!) i++;
     h.buckets[i]!++; h.count++; h.sum += value;
+    void this.startNs;
     this.dirty++;
   }
 
