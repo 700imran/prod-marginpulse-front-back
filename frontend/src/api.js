@@ -51,6 +51,18 @@ function readCache(path) {
 function writeCache(path, v) {
   try { sessionStorage.setItem(cacheKey(path), JSON.stringify({ t: Date.now(), v })); } catch { /* quota: just skip */ }
 }
+/** Synchronous read of a cached GET (null if absent). Lets a screen render real data on its very first frame. */
+export function peekCached(path) {
+  const hit = isCacheable(path) ? readCache(path) : null;
+  return hit ? hit.v : null;
+}
+export const PATHS = {
+  dashboard: (period = '2026-Q2') => `/api/v1/reconciliation/dashboard-summary?tax_period=${period}`,
+  anomalies: (status = 'OPEN') => `/api/v1/reconciliation/anomalies?status=${status}`,
+  insights: () => '/api/v1/reconciliation/dashboard-insights',
+  documents: () => '/api/v1/documents?',
+};
+
 export function clearDataCache() {
   try {
     Object.keys(sessionStorage).filter((k) => k.startsWith(CACHE_PREFIX)).forEach((k) => sessionStorage.removeItem(k));
@@ -160,7 +172,7 @@ export function isLoggedIn() {
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 export async function getDashboard(period = '2026-Q2') {
-  return request('GET', `/api/v1/reconciliation/dashboard-summary?tax_period=${period}`);
+  return request('GET', PATHS.dashboard(period));
 }
 
 // ── Documents ─────────────────────────────────────────────────────────────────
@@ -238,7 +250,7 @@ export async function triggerReconciliation() {
 }
 
 export async function listAnomalies(status = 'OPEN') {
-  return request('GET', `/api/v1/reconciliation/anomalies?status=${status}`);
+  return request('GET', PATHS.anomalies(status));
 }
 
 export async function resolveAnomaly(anomalyId) {
@@ -247,7 +259,7 @@ export async function resolveAnomaly(anomalyId) {
 
 // ── Dashboard insights (ITC risk, vendor follow-up, filing deadlines) ─────────
 export async function getDashboardInsights() {
-  return request('GET', '/api/v1/reconciliation/dashboard-insights');
+  return request('GET', PATHS.insights());
 }
 
 // ── Missing invoice detection ─────────────────────────────────────────────────

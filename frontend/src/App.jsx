@@ -15,6 +15,7 @@ import { GLOBAL_CSS, Icons, NAV_SECTIONS, Toast } from "./theme";
 // first, instead of shipping all 14 screens' code up front.
 const loaders = {
   dashboard: () => import("./components/DashboardView"),
+  global: () => import("./components/GlobalDashboardView"),
   documents: () => import("./components/DocumentsView"),
   gst: () => import("./components/GSTSyncView"),
   profile: () => import("./components/ProfileView"),
@@ -30,6 +31,7 @@ const loaders = {
   auditlog: () => import("./components/AuditLogView"),
 };
 const DashboardView = lazy(loaders.dashboard);
+const GlobalDashboardView = lazy(loaders.global);
 const DocumentsView = lazy(loaders.documents);
 const GSTSyncView = lazy(loaders.gst);
 const ProfileView = lazy(loaders.profile);
@@ -70,7 +72,8 @@ function initials(name) {
 
 function AppShell() {
   const [activeNav, setActiveNav] = useState("dashboard");
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Phones/tablets start with the compact sidebar so the content isn't squeezed into a sliver.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => typeof window !== "undefined" && window.innerWidth < 900);
   const [, startTransition] = useTransition();
   const [viewKey, setViewKey] = useState(0);
   // Paint instantly from what we already know (full profile for this tab, else the
@@ -166,12 +169,14 @@ function AppShell() {
   const orgName = tenant?.businessName && tenant.businessName !== displayName ? tenant.businessName : "";
   const navigate = (id) => {
     startFeature(id); // RUM: click → screen painted
+    if (typeof window !== "undefined" && window.innerWidth < 900) setSidebarCollapsed(true); // small screens: close the menu after choosing
     startTransition(() => setActiveNav(id)); // keep the current screen visible until the next is ready
   };
 
   function renderContent() {
     switch (activeNav) {
       case "dashboard": return <DashboardView onToast={showToast} tenant={tenant} onNavigate={navigate} />;
+      case "global": return <GlobalDashboardView onToast={showToast} tenant={tenant} />;
       case "documents": return <DocumentsView onToast={showToast} />;
       case "gst": return <GSTSyncView onToast={showToast} />;
       case "profile":
@@ -246,6 +251,9 @@ function AppShell() {
                 <button
                   key={item.id}
                   className={`nav-item ${activeNav === item.id ? "active" : ""}`}
+                  title={item.label}
+                  aria-label={item.label}
+                  aria-current={activeNav === item.id ? "page" : undefined}
                   onClick={() => navigate(item.id)}
                   onMouseEnter={() => loaders[item.id]?.().catch(() => {})}
                 >

@@ -94,6 +94,7 @@ export interface TenantContext {
   businessName: string;
   displayName: string | null;
   phoneNumber: string | null;
+  countryCode: string | null;
   planTier: string;
   isActive: boolean;
   isPlatformAdmin: boolean;
@@ -111,7 +112,7 @@ export interface TenantContext {
 //
 
 const TENANT_COLS = `
-      tenant_id as "tenantId", owner_email as "ownerEmail", business_name as "businessName", display_name as "displayName", phone_number as "phoneNumber",
+      tenant_id as "tenantId", owner_email as "ownerEmail", business_name as "businessName", display_name as "displayName", phone_number as "phoneNumber", country_code as "countryCode",
       plan_tier as "planTier", is_active as "isActive", is_platform_admin as "isPlatformAdmin",
       gstin_number as "gstinNumber"`;
 

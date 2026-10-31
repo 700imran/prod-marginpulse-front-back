@@ -1,4 +1,4 @@
-import { printMarginPulseReport } from "./printBrandedReport";
+import { printMarginPulseReport } from "./printReport";
 
 function formatINR(value) {
   const n = Number(value || 0);

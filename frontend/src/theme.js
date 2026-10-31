@@ -66,6 +66,11 @@ body { background-color: #e8eef2; color: var(--text-dark); }
     display: none;
 }
 .nav-section p { font-size: 11px; font-weight: 700; color: var(--text-gray); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+.gd-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 16px; margin-bottom: 24px; }
+.gd-split { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; margin-bottom: 24px; }
+.gd-split > * { min-width: 0; }
+@media (max-width: 900px) { .gd-split { grid-template-columns: minmax(0, 1fr); } }
+.nav-item svg { flex-shrink: 0; width: 20px; height: 20px; min-width: 20px; }
 .nav-item { display: flex; align-items: center; gap: 12px; padding: 12px 14px; color: var(--text-gray); text-decoration: none; border-radius: 10px; margin-bottom: 4px; font-weight: 600; font-size: 14px; transition: all 0.2s ease; white-space: nowrap; cursor: pointer; border: none; background: transparent; width: 100%; text-align: left; }
 .nav-item:hover { background-color: rgba(24, 196, 150, 0.05); color: var(--text-dark); }
 .nav-item.active { background-color: var(--primary-light); color: var(--primary-color); }
@@ -173,6 +178,13 @@ input:checked + .slider:before { transform: translateX(22px); }
 
 // ─── CUSTOM SVG ICONS ──────────────────────────────────────────────────────
 export const Icons = {
+  Globe: () => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9"></circle>
+      <path d="M3 12h18"></path>
+      <path d="M12 3a14 14 0 0 1 0 18a14 14 0 0 1 0-18z"></path>
+    </svg>
+  ),
   Dashboard: () => (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="3" width="7" height="7" rx="1"></rect>
@@ -290,6 +302,7 @@ export const NAV_SECTIONS = [
     title: "Main Menu",
     items: [
       { id: "dashboard", label: "Dashboard", icon: <Icons.Dashboard /> },
+      { id: "global", label: "Global Dashboard", icon: <Icons.Globe />, badge: "New", badgeClass: "badge-growth" },
       { id: "documents", label: "Documents Matrix", icon: <Icons.Documents /> },
       { id: "gst", label: "Tax Portal Sync", icon: <Icons.Sync />, badge: "Pro", badgeClass: "badge-pro" },
       { id: "roi", label: "ROI Calculator", icon: <Icons.Lightning /> },

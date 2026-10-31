@@ -8,7 +8,7 @@ import { maybeFlush, safeLabel } from "./metrics";
 import { registry, emit, setSink } from "./events";
 export { registry, emit };
 
-const VIEWS = new Set(["dashboard", "documents", "gst", "profile", "taxbank", "recon", "api", "notify", "security", "billing", "team", "admin", "roi", "auditlog"]);
+const VIEWS = new Set(["dashboard", "global", "documents", "gst", "profile", "taxbank", "recon", "api", "notify", "security", "billing", "team", "admin", "roi", "auditlog"]);
 const VITALS = new Set(["FCP", "LCP", "CLS", "INP", "TTFB", "APP_READY"]);
 const ERR_KINDS = new Set(["js", "promise", "render"]);
 const hex = (n: number) => [...crypto.getRandomValues(new Uint8Array(n))].map((b) => b.toString(16).padStart(2, "0")).join("");
