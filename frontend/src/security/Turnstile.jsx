@@ -70,15 +70,24 @@ export const Turnstile = forwardRef(function Turnstile({ siteKey, action, onToke
   return <div ref={el} data-testid="turnstile-widget" style={{ minHeight: 65, margin: '8px 0' }} />;
 });
 
+const CAPTCHA_ERROR = /captcha/i;
+const SUPPORT_MSG = "Sign-in is temporarily unavailable: the security check isn't set up on this site yet. Please contact support@marginpulse.in.";
+
 /**
  * State for one protected form.
  *   pending  — still asking the backend whether captcha is on (keep the submit button disabled)
  *   required — captcha is on and no valid token yet
+ *
+ * Site key sources, in order: the backend (/config/public) → the build-time REACT_APP_TURNSTILE_SITE_KEY
+ * (so the widget still works if the API is unreachable or blocked by CORS). If Supabase says a captcha is
+ * required while we believed it was off, onAuthError() switches the widget on instead of leaving the
+ * user with a raw error they can't act on.
  */
 export function useCaptcha(action) {
   const [cfg, setCfg] = useState(null);
   const [token, setToken] = useState('');
   const [failed, setFailed] = useState(false);
+  const [forced, setForced] = useState(false);
   const widget = useRef(null);
 
   useEffect(() => {
@@ -87,11 +96,25 @@ export function useCaptcha(action) {
     return () => { alive = false; };
   }, []);
 
-  const enabled = !!cfg?.enabled && !!cfg?.siteKey;
+  const envKey = process.env.REACT_APP_TURNSTILE_SITE_KEY || '';
+  const siteKey = (cfg?.enabled && cfg?.siteKey) || cfg?.siteKey || envKey || null;
+  const enabled = !!siteKey && (!!cfg?.enabled || !!envKey || forced);
+
+  const onAuthError = useCallback(async (error) => {
+    if (!error || !CAPTCHA_ERROR.test(error.message || '')) return null;
+    // Supabase demands a captcha token but we weren't showing the widget — re-check the backend, then fall back to the build key.
+    const fresh = await getPublicConfig(true);
+    const c = fresh?.captcha ?? { enabled: false };
+    setCfg(c);
+    setForced(true);
+    setToken('');
+    return (c.siteKey || envKey) ? 'Please complete the security check below, then sign in again.' : SUPPORT_MSG;
+  }, [envKey]);
+
   return {
     pending: cfg === null,
     enabled,
-    siteKey: cfg?.siteKey ?? null,
+    siteKey,
     action,
     token,
     failed,
@@ -99,6 +122,7 @@ export function useCaptcha(action) {
     setToken,
     setFailed,
     widget,
+    onAuthError,
     reset: useCallback(() => widget.current?.reset(), []),
   };
 }

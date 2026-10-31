@@ -143,12 +143,13 @@ export function prefetchAppData() {
 
 // ── Public config (no auth: the login screen needs it before anyone is signed in) ──
 let publicConfigPromise = null;
-export function getPublicConfig() {
+export function getPublicConfig(force = false) {
+  if (force) publicConfigPromise = null;
   if (!publicConfigPromise) {
     publicConfigPromise = fetch(`${BASE}/api/v1/config/public`, { signal: AbortSignal.timeout(6000) })
       .then((r) => (r.ok ? r.json() : null))
       .then((c) => c || { captcha: { enabled: false } })
-      .catch(() => { publicConfigPromise = null; return { captcha: { enabled: false } }; }); // retry next time; never block login on it
+      .catch(() => { publicConfigPromise = null; return { captcha: { enabled: false, unavailable: true } }; }); // retry next time; never block login on it
   }
   return publicConfigPromise;
 }

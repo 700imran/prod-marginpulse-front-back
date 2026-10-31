@@ -2,8 +2,9 @@
 let act;
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 
-function mount({ captcha, signIn }) {
+function mount({ captcha, signIn, refreshed, envKey }) {
   jest.resetModules();
+  if (envKey) process.env.REACT_APP_TURNSTILE_SITE_KEY = envKey; else delete process.env.REACT_APP_TURNSTILE_SITE_KEY;
   const React = require('react');
   const { createRoot } = require('react-dom/client');
   act = React.act;
@@ -17,7 +18,7 @@ function mount({ captcha, signIn }) {
   };
   const signInWithPassword = jest.fn(signIn);
   jest.doMock('./supabaseClient', () => ({ supabase: { auth: { signInWithPassword, signUp: jest.fn(), signInWithOAuth: jest.fn() } } }));
-  jest.doMock('./api', () => ({ getPublicConfig: () => Promise.resolve({ captcha }) }));
+  jest.doMock('./api', () => ({ getPublicConfig: (force) => Promise.resolve({ captcha: force && refreshed ? refreshed : captcha }) }));
 
   const LoginPage = require('./LoginPage').default;
   const el = document.createElement('div');
@@ -99,4 +100,55 @@ test('widget load error shows an actionable message instead of a dead form', asy
   await flush();
   act(() => { widgets[0]['error-callback'](); });
   expect(el.textContent).toMatch(/security check couldn't load/i);
+});
+
+const SUPABASE_CAPTCHA_ERR = { message: 'captcha protection: request disallowed (no captcha_token found in request)' };
+
+test('REAL-WORLD MISMATCH: Supabase demands a captcha while our config said off → widget appears with a clear message, retry succeeds', async () => {
+  let call = 0;
+  const { el, widgets, signInWithPassword, onSuccess } = mount({
+    captcha: { enabled: false }, refreshed: ON,
+    signIn: () => (++call === 1 ? Promise.resolve({ data: null, error: SUPABASE_CAPTCHA_ERR }) : Promise.resolve({ data: { session: { access_token: 'a' } }, error: null })),
+  });
+  await flush();
+  expect(widgets).toHaveLength(0);
+  fill(el, 'login-email', 'asha@acme.in'); fill(el, 'login-password', 'Str0ng!Pass#2026');
+  await submit(el);
+  await flush();
+  expect(el.textContent).toMatch(/complete the security check below/i);
+  expect(el.textContent).not.toMatch(/captcha_token|request disallowed/i);   // raw Supabase text is never shown
+  expect(widgets).toHaveLength(1); expect(widgets[0].sitekey).toBe(ON.siteKey);
+  expect(submitBtn(el).disabled).toBe(true);
+  act(() => { widgets[0].callback('tok-777'); });
+  await submit(el);
+  expect(signInWithPassword.mock.calls[1][0].options).toEqual({ captchaToken: 'tok-777' });
+  expect(onSuccess).toHaveBeenCalled();
+});
+
+test('captcha required by Supabase but no site key exists anywhere → clear contact-support message, not a raw error', async () => {
+  const { el, widgets } = mount({ captcha: { enabled: false }, refreshed: { enabled: false }, signIn: () => Promise.resolve({ data: null, error: SUPABASE_CAPTCHA_ERR }) });
+  await flush();
+  fill(el, 'login-email', 'asha@acme.in'); fill(el, 'login-password', 'Str0ng!Pass#2026');
+  await submit(el); await flush();
+  expect(widgets).toHaveLength(0);
+  expect(el.textContent).toMatch(/security check isn't set up on this site yet/i);
+  expect(el.textContent).toContain('support@marginpulse.in');
+  expect(el.textContent).not.toMatch(/captcha_token/i);
+});
+
+test('API unreachable (CORS / outage) but a build-time site key exists → widget still shows from the first render', async () => {
+  const { el, widgets } = mount({ captcha: { enabled: false, unavailable: true }, envKey: '1x00000000000000000000AA', signIn: () => Promise.resolve({ data: { session: {} }, error: null }) });
+  await flush();
+  expect(widgets).toHaveLength(1);
+  expect(widgets[0].sitekey).toBe('1x00000000000000000000AA');
+  fill(el, 'login-email', 'asha@acme.in'); fill(el, 'login-password', 'Str0ng!Pass#2026');
+  expect(submitBtn(el).disabled).toBe(true);
+});
+
+test('unrelated login errors are still shown as-is', async () => {
+  const { el } = mount({ captcha: { enabled: false }, signIn: () => Promise.resolve({ data: null, error: { message: 'Invalid login credentials' } }) });
+  await flush();
+  fill(el, 'login-email', 'asha@acme.in'); fill(el, 'login-password', 'Str0ng!Pass#2026');
+  await submit(el); await flush();
+  expect(el.textContent).toContain('Invalid login credentials');
 });

@@ -583,7 +583,8 @@ function LoginForm({ onSuccess }) {
 
     if (error || !data?.session) {
       captcha.reset(); // a captcha token is single-use — fetch a fresh one for the next attempt
-      setApiError(error?.message || ERROR_MESSAGES.GENERIC_ERROR);
+      const captchaMsg = await captcha.onAuthError(error); // Supabase wants a captcha we weren't showing → show it
+      setApiError(captchaMsg || error?.message || ERROR_MESSAGES.GENERIC_ERROR);
       return;
     }
 
@@ -746,7 +747,8 @@ function RegisterForm({ onSuccess }) {
 
     if (error) {
       captcha.reset(); // single-use token
-      setApiError(error.message || ERROR_MESSAGES.GENERIC_ERROR);
+      const captchaMsg = await captcha.onAuthError(error);
+      setApiError(captchaMsg || error.message || ERROR_MESSAGES.GENERIC_ERROR);
       return;
     }
 
