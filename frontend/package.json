@@ -8,7 +8,7 @@
     "pdfjs-dist": "^6.3.289",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "read-excel-file": "^9.3.12",
+    "read-excel-file": "^9.3.13",
     "recharts": "^3.10.1",
     "tesseract.js": "^7.0.0",
     "@tesseract.js-data/eng": "^1.0.0"
