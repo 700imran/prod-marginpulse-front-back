@@ -2,6 +2,7 @@
  * GSTSyncView.jsx — real data from GET /api/v1/gst/vendor-status and
  * /api/v1/gst/itc-summary, plus a real trigger for /api/v1/gst/sync.
  */
+import ViewSkeleton from "./ViewSkeleton";
 import { useState, useEffect } from "react";
 import { getVendorGSTStatus, getITCSummary, triggerGSTSync } from "../api";
 
@@ -39,7 +40,7 @@ export default function GSTSyncView({ onToast }) {
     }
   }
 
-  if (loading) return <div className="card"><p style={{ color: "var(--text-gray)" }}>Loading…</p></div>;
+  if (loading) return <ViewSkeleton variant="cards" />;
 
   return (
     <>

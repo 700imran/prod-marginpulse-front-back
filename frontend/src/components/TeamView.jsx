@@ -5,6 +5,7 @@
  * their own login — see team_member.py model docstring for why that's
  * intentionally a separate, later piece of work.
  */
+import ViewSkeleton from "./ViewSkeleton";
 import { useState, useEffect } from "react";
 import { listTeamMembers, inviteTeamMember, revokeTeamMember } from "../api";
 
@@ -61,7 +62,7 @@ export default function TeamView({ onToast }) {
     }
   }
 
-  if (loading) return <div className="card"><p style={{ color: "var(--text-gray)" }}>Loading…</p></div>;
+  if (loading) return <ViewSkeleton variant="table" />;
 
   return (
     <div className="card">

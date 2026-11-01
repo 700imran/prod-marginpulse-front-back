@@ -2,6 +2,7 @@
  * NotificationsView.jsx — real load/save against
  * GET/PATCH /api/v1/settings/notifications.
  */
+import ViewSkeleton from "./ViewSkeleton";
 import { useState, useEffect } from "react";
 import { getNotificationSettings, updateNotificationSettings } from "../api";
 import { Toggle } from "../theme";
@@ -40,7 +41,7 @@ export default function NotificationsView({ onToast }) {
     patch({ criticalItcThresholdInr: num });
   }
 
-  if (loading) return <div className="card"><p style={{ color: "var(--text-gray)" }}>Loading…</p></div>;
+  if (loading) return <ViewSkeleton variant="form" />;
 
   return (
     <div className="card">

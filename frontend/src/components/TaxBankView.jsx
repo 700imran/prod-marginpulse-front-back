@@ -8,6 +8,7 @@
  * real, separate step rather than instant — same principle as the
  * existing GST sync flow elsewhere in the app.
  */
+import ViewSkeleton from "./ViewSkeleton";
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   listTaxIdentifiers, addTaxIdentifier, reverifyTaxIdentifier, deleteTaxIdentifier, setPrimaryTaxIdentifier,
@@ -144,7 +145,7 @@ export default function TaxBankView({ onToast }) {
   }
 
   if (loading) {
-    return <div className="card"><p style={{ color: "var(--text-gray)" }}>Loading…</p></div>;
+    return <ViewSkeleton variant="table" />;
   }
 
   return (

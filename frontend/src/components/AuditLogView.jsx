@@ -4,6 +4,7 @@
  * DocumentsView.jsx's detail modal instead — this view is the
  * "everything, across every document/anomaly/bank transaction" list.
  */
+import ViewSkeleton from "./ViewSkeleton";
 import { useState, useEffect } from "react";
 import { getAuditLog } from "../api";
 
@@ -41,7 +42,7 @@ export default function AuditLogView() {
         </select>
       </div>
 
-      {loading && <p style={{ fontSize: 13, color: "var(--text-gray)" }}>Loading…</p>}
+      {loading && <ViewSkeleton variant="table" />}
       {!loading && entries.length === 0 && <p style={{ fontSize: 13, color: "var(--text-gray)" }}>No audit entries yet.</p>}
       {!loading && entries.map((e) => (
         <div className="list-row" key={e.auditLogId} style={{ alignItems: "flex-start" }}>

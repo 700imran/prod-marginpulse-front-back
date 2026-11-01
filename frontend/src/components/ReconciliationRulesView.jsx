@@ -2,6 +2,7 @@
  * ReconciliationRulesView.jsx — real load/save against
  * GET/PATCH /api/v1/settings/reconciliation.
  */
+import ViewSkeleton from "./ViewSkeleton";
 import { useState, useEffect } from "react";
 import { getReconciliationSettings, updateReconciliationSettings } from "../api";
 import { Toggle } from "../theme";
@@ -65,7 +66,7 @@ export default function ReconciliationRulesView({ onToast }) {
     patch({ ocrConfidenceThreshold: num });
   }
 
-  if (loading) return <div className="card"><p style={{ color: "var(--text-gray)" }}>Loading…</p></div>;
+  if (loading) return <ViewSkeleton variant="form" />;
 
   return (
     <>

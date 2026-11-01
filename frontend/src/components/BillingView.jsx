@@ -1,140 +1,44 @@
 /**
- * BillingView.jsx — Payment entry point for the app.
- *
- * Uses Razorpay checkout to create a backend order and verify it after
- * successful payment. This is intentionally kept in the dedicated Billing
- * page rather than spreading checkout logic across the app shell.
+ * BillingView.jsx — plan selection + Razorpay checkout.
+ * The payment logic lives in ../payments/razorpay.js (timeouts, retry-safe script loader, inline status);
+ * this file is only the screen. Plan prices here are DISPLAY ONLY — the server sets the real price.
  */
-import { useState } from "react";
-import { tokenManager } from "../security/tokenManager";
+import { useEffect, useRef, useState } from "react";
+import { startPayment, retryVerification, loadRazorpayScript } from "../payments/razorpay";
+import { clearDataCache } from "../api";
 
-const API_BASE = "https://api.marginpulse.in";
+export { startPayment };
+
 const PLAN_OPTIONS = [
   { id: "starter", label: "Starter", price: 499, description: "For solo practitioners" },
   { id: "pro", label: "Pro", price: 1499, description: "Best for growing teams" },
   { id: "enterprise", label: "Enterprise", price: 4999, description: "Advanced controls & scale" },
 ];
 
-function getAccessToken() {
-  return tokenManager.getAccessToken() || "";
-}
-
-async function loadRazorpayScript() {
-  if (window.Razorpay) return;
-
-  await new Promise((resolve, reject) => {
-    const existing = document.getElementById("razorpay-checkout-script");
-    if (existing) {
-      existing.addEventListener("load", resolve, { once: true });
-      existing.addEventListener("error", () => reject(new Error("Failed to load Razorpay script.")), { once: true });
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.id = "razorpay-checkout-script";
-    script.src = "https://checkout.razorpay.com/v1/checkout.js";
-    script.async = true;
-    script.onload = resolve;
-    script.onerror = () => reject(new Error("Failed to load Razorpay script."));
-    document.body.appendChild(script);
-  });
-}
-
-export async function startPayment(planId) {
-  const token = await tokenManager.getValidAccessToken();
-
-  if (!token) {
-    alert("Please log in before starting a payment.");
-    return;
-  }
-
-  if (!planId) {
-    alert("Please choose a plan.");
-    return;
-  }
-
-  try {
-    await loadRazorpayScript();
-
-    const orderRes = await fetch(`${API_BASE}/api/v1/billing/create-order`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ plan: planId }), // the server decides the price
-    });
-
-    const orderData = await orderRes.json().catch(() => ({}));
-
-    if (!orderRes.ok || !orderData?.orderId || !orderData?.keyId) {
-      throw new Error(orderData?.error || orderData?.message || "Failed to create payment order.");
-    }
-
-    const userEmail = localStorage.getItem("userEmail") || localStorage.getItem("mp_user_email") || "";
-
-    const rzp = new window.Razorpay({
-      key: orderData.keyId,
-      order_id: orderData.orderId,
-      currency: "INR",
-      name: "MarginPulse",
-      description: "Subscription Payment",
-      handler: async function (response) {
-        const verifyRes = await fetch(`${API_BASE}/api/v1/billing/verify-payment`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            razorpay_order_id: response.razorpay_order_id,
-            razorpay_payment_id: response.razorpay_payment_id,
-            razorpay_signature: response.razorpay_signature,
-          }),
-        });
-
-        const verifyData = await verifyRes.json().catch(() => ({}));
-
-        if (verifyRes.ok) {
-          alert("Payment successful! Your plan is now active.");
-          try { sessionStorage.removeItem("mp_profile"); } catch { /* ignore */ }
-          window.location.reload(); // pick up the upgraded plan
-          return;
-        }
-
-        alert(verifyData?.error || verifyData?.message || "Payment verification failed — if money was deducted, contact support@marginpulse.in with your payment id.");
-      },
-      prefill: {
-        email: userEmail,
-      },
-      theme: { color: "#18c496" },
-    });
-
-    rzp.on("payment.failed", function (response) {
-      alert(`Payment failed: ${response?.error?.description || "Unknown error"}`);
-    });
-
-    rzp.open();
-  } catch (error) {
-    console.error("[BillingView] Payment failed:", error);
-    alert(error?.message || "Something went wrong while starting the payment.");
-  }
-}
-
 export default function BillingView({ tenant }) {
-  const [isPaying, setIsPaying] = useState(false);
+  const [status, setStatus] = useState({ stage: "idle", message: "" });
   const [selectedPlanId, setSelectedPlanId] = useState("pro");
+  const reloadTimer = useRef(null);
+  const busy = status.stage === "preparing" || status.stage === "verifying";
   const planLabel = tenant?.planTier === "FREE" ? "Auditor Free" : tenant?.planTier || "Auditor Free";
   const selectedPlan = PLAN_OPTIONS.find((plan) => plan.id === selectedPlanId) || PLAN_OPTIONS[1];
 
-  const handleUpgrade = async () => {
-    setIsPaying(true);
-    try {
-      await startPayment(selectedPlan.id);
-    } finally {
-      setIsPaying(false);
+  // Load Razorpay's script while the page is idle so the click opens the payment window immediately.
+  useEffect(() => {
+    loadRazorpayScript().catch(() => { /* surfaced with a clear message if the user actually clicks Pay */ });
+    return () => clearTimeout(reloadTimer.current);
+  }, []);
+
+  const onStatus = (next) => {
+    setStatus(next);
+    if (next.stage === "success") {
+      try { sessionStorage.removeItem("mp_profile"); } catch { /* ignore */ }
+      clearDataCache();
+      reloadTimer.current = setTimeout(() => window.location.reload(), 1500); // pick up the upgraded plan
     }
   };
+  const handleUpgrade = () => startPayment(selectedPlan.id, { onStatus });
+  const handleRetry = () => retryVerification({ onStatus });
 
   return (
     <div className="card">
@@ -182,14 +86,37 @@ export default function BillingView({ tenant }) {
       <button
         className="btn btn-primary"
         onClick={handleUpgrade}
-        disabled={isPaying}
-        style={{ opacity: isPaying ? 0.7 : 1 }}
+        disabled={busy || status.stage === "awaiting" || status.stage === "success"}
+        aria-busy={busy}
+        style={{ opacity: busy ? 0.7 : 1 }}
       >
-        {isPaying ? "Processing payment..." : `Upgrade to ${selectedPlan.label} — ₹${selectedPlan.price}`}
+        {status.stage === "preparing" ? "Opening secure payment…"
+          : status.stage === "verifying" ? "Confirming payment…"
+          : status.stage === "awaiting" ? "Complete payment in the window"
+          : `Upgrade to ${selectedPlan.label} — ₹${selectedPlan.price}`}
       </button>
 
+      {status.message && (
+        <div
+          role={status.stage === "error" ? "alert" : "status"}
+          style={{
+            marginTop: 14, padding: "10px 14px", borderRadius: 12, fontSize: 14, lineHeight: 1.5,
+            background: status.stage === "error" ? "#fdecea" : status.stage === "success" ? "#eafbf5" : "#f2f4f7",
+            color: status.stage === "error" ? "#b42318" : status.stage === "success" ? "#0f6e56" : "#344054",
+          }}
+        >
+          {busy && <span className="mp-auth-spinner" aria-hidden="true" style={{ display: "inline-block", marginRight: 8 }}></span>}
+          {status.message}
+          {status.retry && (
+            <div style={{ marginTop: 8 }}>
+              <button type="button" className="btn btn-primary" onClick={handleRetry} disabled={busy}>Retry confirmation</button>
+            </div>
+          )}
+        </div>
+      )}
+
       <p style={{ fontSize: 12, color: "var(--text-gray)", marginTop: 14 }}>
-        Payment is processed through Razorpay via the MarginPulse billing API at <strong>https://api.marginpulse.in</strong>.
+        Payments are processed securely by Razorpay. Your plan is activated only after the payment is confirmed by our server.
       </p>
     </div>
   );

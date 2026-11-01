@@ -38,7 +38,9 @@ app.use("*", requestId, telemetry, securityHeaders, corsMiddleware(), requestSiz
 // tighter on public/unauthenticated and money endpoints.
 app.use("/api/*", isolateRateLimit(600, 60));
 app.use("/api/v1/roi/*", rateLimit("roi", 20, 60));
-app.use("/api/v1/billing/*", rateLimit("billing", 30, 60, { failClosed: true }));
+// Payments must not depend on Redis being up: the zero-latency per-isolate limiter is the always-on backstop and the
+// Upstash limiter (1.5 s timeout) adds global limits; if Redis is down we fail OPEN and count it (ratelimit_backend_error).
+app.use("/api/v1/billing/*", isolateRateLimit(30, 60), rateLimit("billing", 30, 60));
 app.use("/webhook/*", rateLimit("webhook", 300, 60));
 app.use("/api/razorpay/*", rateLimit("rzp-webhook", 300, 60));
 app.use("*", withDb);

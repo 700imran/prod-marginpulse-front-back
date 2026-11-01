@@ -15,6 +15,8 @@ async function upstash(env: Env, ...command: (string | number)[]): Promise<any> 
       "Content-Type": "application/json",
     },
     body: JSON.stringify(command),
+    // Fail fast: this runs before sensitive requests (e.g. payments). A stalled Redis must cost ~1.5 s, not minutes.
+    signal: AbortSignal.timeout(1500),
   });
   if (!res.ok) throw new Error(`Upstash command failed: ${res.status}`);
   const json = (await res.json()) as { result: any };

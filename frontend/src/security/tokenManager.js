@@ -75,10 +75,12 @@ class TokenManager {
     if (this.currentSession?.access_token && exp && exp * 1000 - Date.now() > 10000) {
       return this.currentSession.access_token;
     }
-    await this.ready;
+    // Never wait forever on auth bookkeeping (a stuck refresh/lock must not freeze the Pay button or any request).
+    const within = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(r, ms))]);
+    await within(this.ready, 6000);
     try {
-      const { data } = await supabase.auth.getSession(); // refreshes if expired
-      this.currentSession = data?.session ?? this.currentSession;
+      const r = await within(supabase.auth.getSession(), 8000); // refreshes if expired
+      this.currentSession = r?.data?.session ?? this.currentSession;
     } catch { /* fall through with whatever we have */ }
     return this.currentSession?.access_token || '';
   }

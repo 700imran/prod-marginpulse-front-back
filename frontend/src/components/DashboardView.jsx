@@ -9,6 +9,7 @@
  * presence) rather than a fixed "have you clicked this before" flag, so
  * it always reflects actual account state even across devices/browsers.
  */
+import ViewSkeleton from "./ViewSkeleton";
 import { ACCEPT_ATTR, fileKind } from "../ingest/parseFile";
 import { useState, useEffect } from "react";
 import { StatusDonut, RiskBarChart } from "./charts";
@@ -325,7 +326,7 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
     setGuideHidden(true);
   }
 
-  if (loading) return <div className="card"><p style={{ color: "var(--text-gray)" }}>Loading dashboard…</p></div>;
+  if (loading) return <ViewSkeleton variant="dashboard" />;
 
   const m = summary?.summaryMetrics || {};
 

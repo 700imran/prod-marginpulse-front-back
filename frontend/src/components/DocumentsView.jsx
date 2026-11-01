@@ -7,6 +7,7 @@
  *     when a reconciliation-relevant field changes
  *   - that document's audit trail (GET /documents/{id}/audit-log)
  */
+import ViewSkeleton from "./ViewSkeleton";
 import { useState, useEffect } from "react";
 import { listDocuments, correctDocument, getDocumentAuditLog, downloadReconciliationReport } from "../api";
 import { VerificationBadge } from "../theme";
@@ -65,7 +66,7 @@ function Modal({ onClose, children, width = 560 }) {
 }
 
 function AuditLogList({ entries }) {
-  if (!entries) return <p style={{ fontSize: 13, color: "var(--text-gray)" }}>Loading audit trail…</p>;
+  if (!entries) return <ViewSkeleton variant="table" delay={0} />;
   if (entries.length === 0) return <p style={{ fontSize: 13, color: "var(--text-gray)" }}>No changes recorded yet.</p>;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -258,7 +259,7 @@ export default function DocumentsView({ onToast }) {
         </div>
       </div>
 
-      {loading && <p style={{ color: "var(--text-gray)", fontSize: 13 }}>Loading…</p>}
+      {loading && <ViewSkeleton variant="table" />}
       {!loading && docs.length === 0 && <p style={{ color: "var(--text-gray)", fontSize: 13 }}>No documents found.</p>}
       {!loading && docs.map((d) => (
         <div className="list-row" key={d.documentId} style={{ cursor: "pointer" }} onClick={() => setSelectedDoc(d)}>

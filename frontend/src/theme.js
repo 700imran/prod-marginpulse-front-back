@@ -77,6 +77,11 @@ body { background-color: #e8eef2; color: var(--text-dark); }
 .nav-badge { margin-left: auto; font-size: 10px; padding: 3px 8px; border-radius: 12px; font-weight: 800; }
 .view-skeleton { padding: 8px 0; }
 .skeleton { background: linear-gradient(90deg, #e9edf0 25%, #f4f6f8 50%, #e9edf0 75%); background-size: 200% 100%; animation: mp-shimmer 1.1s infinite linear; border-radius: 12px; }
+.sk-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.sk-kpi { height: 96px; border-radius: 16px; }
+.sk-line { height: 14px; margin: 12px 0; }
+.sk-input { height: 40px; margin-top: 8px; border-radius: 12px; }
+@media (prefers-reduced-motion: reduce) { .skeleton { animation: none; } }
 .sk-title { height: 28px; width: 38%; margin-bottom: 20px; }
 .sk-row { height: 74px; margin-bottom: 14px; }
 .sk-row.short { width: 62%; }

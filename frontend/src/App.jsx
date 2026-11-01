@@ -7,6 +7,7 @@ import { useState, useEffect, useRef, useCallback, useTransition, lazy, Suspense
 import LoginPage from "./LoginPage";
 import { isLoggedIn, logout, getProfile, prefetchAppData } from "./api";
 import { tokenManager } from "./security/tokenManager";
+import ViewSkeleton from "./components/ViewSkeleton";
 import { initRUM, startFeature, endFeature, markAppReady } from "./telemetry/rum";
 import { GLOBAL_CSS, Icons, NAV_SECTIONS, Toast } from "./theme";
 
@@ -304,7 +305,7 @@ function AppShell() {
           </div>
 
           <div className="fade-in">
-            <Suspense fallback={<div className="view-skeleton" aria-busy="true"><div className="skeleton sk-title" /><div className="skeleton sk-row" /><div className="skeleton sk-row" /><div className="skeleton sk-row short" /></div>}>
+            <Suspense fallback={<ViewSkeleton variant="cards" delay={40} />}>
               <div key={viewKey}>{renderContent()}</div>
             </Suspense>
           </div>

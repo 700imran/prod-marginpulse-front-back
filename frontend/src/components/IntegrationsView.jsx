@@ -7,6 +7,7 @@
  * internal/integrations/stub.go in the backend repo for what's needed
  * to light each of those up.
  */
+import ViewSkeleton from "./ViewSkeleton";
 import { useState, useEffect } from "react";
 import {
   getIntegrationSettings, updateIntegrationSettings,
@@ -256,7 +257,7 @@ export default function IntegrationsView({ onToast }) {
     setSaving(false);
   }
 
-  if (loading) return <div className="card"><p style={{ color: "var(--text-gray)" }}>Loading…</p></div>;
+  if (loading) return <ViewSkeleton variant="cards" />;
 
   return (
     <>

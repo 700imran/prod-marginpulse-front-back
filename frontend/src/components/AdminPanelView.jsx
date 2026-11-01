@@ -11,6 +11,7 @@
  *  - Tenants: every customer account, with suspend/reactivate.
  *  - System Stats: basic counts derived from DynamoDB.
  */
+import ViewSkeleton from "./ViewSkeleton";
 import { useState, useEffect } from "react";
 import {
   getPlatformSettings, updatePlatformSettings,
@@ -81,7 +82,7 @@ function PlatformSettingsTab({ onToast }) {
     }
   }
 
-  if (loading) return <p style={{ color: "var(--text-gray)" }}>Loading…</p>;
+  if (loading) return <ViewSkeleton variant="form" />;
 
   return (
     <>
@@ -165,7 +166,7 @@ function TenantsTab({ onToast }) {
     }
   }
 
-  if (loading) return <p style={{ color: "var(--text-gray)" }}>Loading…</p>;
+  if (loading) return <ViewSkeleton variant="form" />;
 
   return (
     <div className="card">
@@ -199,7 +200,7 @@ function StatsTab() {
 
   useEffect(() => { getSystemStats().then((data) => { if (data) setStats(data); }); }, []);
 
-  if (!stats) return <p style={{ color: "var(--text-gray)" }}>Loading…</p>;
+  if (!stats) return <ViewSkeleton variant="form" />;
 
   return (
     <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>

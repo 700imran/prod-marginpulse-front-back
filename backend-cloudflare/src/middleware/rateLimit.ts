@@ -36,11 +36,12 @@ export function isolateRateLimit(limit: number, windowSeconds: number): Middlewa
   return async (c, next) => {
     const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
     const now = Date.now();
-    let b = buckets.get(ip);
+    const key = `${limit}:${windowSeconds}:${ip}`; // each limiter has its OWN counter (they used to share one per IP)
+    let b = buckets.get(key);
     if (!b || now > b.reset) {
       if (buckets.size > 5000) for (const [k, v] of buckets) if (now > v.reset) buckets.delete(k);
       b = { n: 0, reset: now + windowSeconds * 1000 };
-      buckets.set(ip, b);
+      buckets.set(key, b);
     }
     if (++b.n > limit) {
       c.header("Retry-After", String(Math.ceil((b.reset - now) / 1000)));

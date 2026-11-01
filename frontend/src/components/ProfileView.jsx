@@ -1,3 +1,4 @@
+import ViewSkeleton from "./ViewSkeleton";
 import { useState, useEffect } from "react";
 import { getProfile, updateProfile } from "../api";
 
@@ -68,7 +69,7 @@ export default function ProfileView({ profile: initialProfile, profileLoading, o
   }
 
   if (loading) {
-    return <div className="card"><p style={{ color: "var(--text-gray)" }}>Loading profile…</p></div>;
+    return <ViewSkeleton variant="form" />;
   }
 
   return (

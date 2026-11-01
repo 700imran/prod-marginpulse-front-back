@@ -20,6 +20,7 @@ import {
 import { ACCEPT_ATTR, fileKind } from "../ingest/parseFile";
 import { CURRENCIES, TERMS, formatMoney, formatDate, percent, humanizeType, sortBySeverity, executiveSummary } from "../global/format";
 import { getRegion, setRegion as saveRegion, getCurrency, setCurrency as saveCurrency } from "../global/region";
+import ViewSkeleton from "./ViewSkeleton";
 import { printMarginPulseReport } from "../reporting/printReport";
 
 const ok = (v) => v && typeof v === "object" && !v.error;
@@ -154,13 +155,7 @@ export default function GlobalDashboardView({ tenant, onToast }) {
     });
   }
 
-  if (loading) {
-    return (
-      <div className="view-skeleton" aria-busy="true" aria-label="Loading global dashboard">
-        <div className="skeleton sk-title" /><div className="skeleton sk-row" /><div className="skeleton sk-row" /><div className="skeleton sk-row short" />
-      </div>
-    );
-  }
+  if (loading) return <ViewSkeleton variant="dashboard" delay={0} />;
 
   const deadlines = insights?.filingDeadlines || [];
   const suppliers = insights?.vendorsRequiringFollowUp || [];
