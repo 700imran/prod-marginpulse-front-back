@@ -62,8 +62,9 @@ if (API) {
     const txt = await r.text();
     must(!/secret|private|password|service_role/i.test(txt), 'public config contains a secret-looking field');
     const cfg = JSON.parse(txt);
-    if (!cfg.captcha?.enabled) return 'captcha OFF (enable Turnstile before launch)';
+    if (!cfg.captcha?.enabled) return 'captcha OFF (set TURNSTILE_SITE_KEY before enabling Supabase CAPTCHA)';
     must(typeof cfg.captcha.siteKey === 'string' && cfg.captcha.siteKey.length > 8, 'captcha enabled but no site key');
+    if (!cfg.captcha.serverVerification) return 'widget ON, Worker secret not set (Supabase-only protection; anonymous ROI not challenged yet)';
     const roi = await get(`${API}/api/v1/roi`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     must(roi.status === 403, `anonymous ROI call was not challenged (HTTP ${roi.status})`);
     return 'captcha ON, anonymous ROI blocked';

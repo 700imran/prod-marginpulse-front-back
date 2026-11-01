@@ -1,4 +1,6 @@
 name = "prod-marginpulse-front-back"
+# Deploys must not delete variables that are managed in the Cloudflare dashboard (e.g. TURNSTILE_SITE_KEY).
+keep_vars = true
 main = "src/index.ts"
 compatibility_date = "2025-01-09"
 compatibility_flags = ["nodejs_compat"]
@@ -107,9 +109,9 @@ head_sampling_rate = 1
 
 [vars]
 ENVIRONMENT = "production"
-# Cloudflare Turnstile PUBLIC site key (dashboard → Turnstile). Empty = captcha off. Also set the secret:
-#   wrangler secret put TURNSTILE_SECRET
-TURNSTILE_SITE_KEY = ""
+# TURNSTILE_SITE_KEY is intentionally NOT listed here: it is set in the Cloudflare dashboard (Variables) and
+# `keep_vars = true` (top of file) stops deploys from deleting dashboard-managed variables.
+# TURNSTILE_SECRET is a Worker *secret* (Settings → Variables and Secrets → type Secret).
 SUPABASE_URL = "https://nseurvhbqkdlemcfoixt.supabase.co"
 UPSTASH_REDIS_REST_URL = "https://above-rat-197792.upstash.io"
 GST_API_BASE_URL = "https://REPLACE-gst-portal-provider.example.com"
@@ -118,7 +120,7 @@ ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
 LLM_MAX_TOKENS = "1024"
 AI_MAX_PROMPT_TOKENS = "8000"
 AI_MAX_COMPLETION_TOKENS = "2000"
-FRONTEND_ORIGIN = "https://app.marginpulse.in"
+FRONTEND_ORIGIN = "https://app.marginpulse.in,https://prod-marginpulse-frontend.imrankhan210r.workers.dev"
 INGEST_EMAIL_ADDRESS = "noreply@marginpulse.example.com"
 WHATSAPP_API_VERSION = "v19.0"
 AI_INSIGHTS_DAILY_BUDGET_USD = "5.00"

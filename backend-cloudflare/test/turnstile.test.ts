@@ -83,13 +83,24 @@ test("guard: unconfigured deployments keep working and the skip is recorded", as
   assert.equal(captchaConfigured({ TURNSTILE_SECRET: "s" }), false); // both key and secret needed
 });
 
-test("public config exposes only the site key — never the secret — and only when fully configured", async () => {
+test("public config: the widget turns on with just the site key; the secret never reaches the browser", async () => {
   const a = new Hono<any>(); a.route("/config", publicConfigRoutes);
-  const on = await a.request("/config/public", {}, ENV);
-  const txt = await on.text();
-  assert.ok(!txt.includes(ENV.TURNSTILE_SECRET), "secret leaked to the browser");
-  const j = JSON.parse(txt);
-  assert.equal(j.captcha.enabled, true); assert.equal(j.captcha.siteKey, ENV.TURNSTILE_SITE_KEY);
-  const off = JSON.parse(await (await a.request("/config/public", {}, { TURNSTILE_SITE_KEY: "k" })).text());
-  assert.equal(off.captcha.enabled, false); assert.equal(off.captcha.siteKey, null);
+  const both = await (await a.request("/config/public", {}, ENV)).text();
+  assert.ok(!both.includes(ENV.TURNSTILE_SECRET), "secret leaked to the browser");
+  let j = JSON.parse(both);
+  assert.equal(j.captcha.enabled, true); assert.equal(j.captcha.siteKey, ENV.TURNSTILE_SITE_KEY); assert.equal(j.captcha.serverVerification, true);
+  j = JSON.parse(await (await a.request("/config/public", {}, { TURNSTILE_SITE_KEY: "k" })).text());   // site key only (Supabase-only protection)
+  assert.equal(j.captcha.enabled, true); assert.equal(j.captcha.serverVerification, false);
+  j = JSON.parse(await (await a.request("/config/public", {}, {})).text());
+  assert.equal(j.captcha.enabled, false); assert.equal(j.captcha.siteKey, null);
+});
+
+test("hostname pin accepts any listed frontend origin (comma-separated FRONTEND_ORIGIN) and still rejects others", async () => {
+  const env: any = { ...ENV, FRONTEND_ORIGIN: "https://app.marginpulse.in, https://prod-marginpulse-frontend.imrankhan210r.workers.dev" };
+  let m = mockCloudflare(okReply({ hostname: "prod-marginpulse-frontend.imrankhan210r.workers.dev" }));
+  try { assert.deepEqual(await verifyTurnstile(env, "t", { action: "login" }), { ok: true }); } finally { m.restore(); }
+  m = mockCloudflare(okReply({ hostname: "app.marginpulse.in" }));
+  try { assert.deepEqual(await verifyTurnstile(env, "t", { action: "login" }), { ok: true }); } finally { m.restore(); }
+  m = mockCloudflare(okReply({ hostname: "evil.example" }));
+  try { const r = await verifyTurnstile(env, "t", { action: "login" }); assert.equal(r.ok, false); } finally { m.restore(); }
 });

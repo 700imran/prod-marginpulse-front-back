@@ -13,6 +13,8 @@ permissions:
 
 jobs:
   probe:
+    # Stays dormant (no false alarms) until you set the repository variable API_URL — Settings → Secrets and variables → Actions → Variables.
+    if: ${{ vars.API_URL != '' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -21,8 +23,8 @@ jobs:
         with: { node-version: 20 }
       - name: Probe production
         env:
-          API_URL: ${{ vars.API_URL || 'https://api.marginpulse.in' }}
-          APP_URL: ${{ vars.APP_URL || 'https://app.marginpulse.in' }}
+          API_URL: ${{ vars.API_URL }}
+          APP_URL: ${{ vars.APP_URL }}
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
           OTLP_ENDPOINT: ${{ secrets.OTLP_ENDPOINT }}

@@ -6,6 +6,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import type { Env } from "../config";
 import { emit } from "../observability/events";
+import { allowedOrigins } from "../middleware/security";
 
 const SITEVERIFY = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 export const TURNSTILE_HEADER = "X-Turnstile-Token";
@@ -43,8 +44,8 @@ export async function verifyTurnstile(
   }
   if (!data.success) return { ok: false, status: 403, error: "Security check failed", codes: data["error-codes"] };
 
-  const allowedHost = (() => { try { return new URL(env.FRONTEND_ORIGIN).hostname; } catch { return ""; } })();
-  if (allowedHost && data.hostname && data.hostname !== allowedHost) return { ok: false, status: 403, error: "Security check failed", codes: ["hostname-mismatch"] };
+  const allowedHosts = allowedOrigins(env).flatMap((o) => { try { return [new URL(o).hostname]; } catch { return []; } });
+  if (allowedHosts.length && data.hostname && !allowedHosts.includes(data.hostname)) return { ok: false, status: 403, error: "Security check failed", codes: ["hostname-mismatch"] };
   if (data.action && data.action !== opts.action) return { ok: false, status: 403, error: "Security check failed", codes: ["action-mismatch"] };
   return { ok: true };
 }
