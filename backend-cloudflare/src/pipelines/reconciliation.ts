@@ -109,6 +109,8 @@ export interface BankRow {
 export interface MatchResult {
   documentId: string;
   matchedBankTransactionId: string | null;
+  /** For MANUAL_REVIEW: the bank row the engine thinks is the payment (not applied until a human confirms). */
+  candidateBankTransactionId?: string | null;
   score: number;
   status: "RECONCILED" | "MANUAL_REVIEW" | "UNMATCHED" | "FAILED";
   reason: string;
@@ -184,23 +186,33 @@ export function tokens(s: string): string[] {
     .filter((t) => t.length > 1 && !NOISE.has(t) && !/^\d{6,}$/.test(t) && !/^[a-z]{4}0\w{6}$/.test(t));
 }
 
-// Share of the vendor's tokens that appear (exactly or with a small typo /
-// truncation) in the bank narration. Containment, not whole-string distance.
+// Generic trade words ("Traders", "Steel Works", "Logistics") are weak evidence of identity: banks routinely
+// drop or shorten them, so they count 0.4 where a distinctive word counts 1.
+const GENERIC = new Set(["traders", "trading", "enterprises", "enterprise", "works", "industries", "industry", "solutions", "services", "service", "supplies", "supply", "logistics", "packaging", "agencies", "agency", "associates", "sons", "brothers", "bros", "group", "international", "exports", "export", "imports", "import", "foods", "food", "textiles", "chemicals", "electricals", "electronics", "engineering", "technologies", "technology", "systems", "distributors", "marketing", "corporation", "stores", "store", "office", "print", "printers", "packers", "movers", "transport", "transporters", "infra", "infrastructure", "builders", "constructions", "construction", "pharma", "laboratories", "labs", "agro", "products", "product", "ventures", "impex", "exim", "india", "global", "overseas", "mart", "retail", "wholesale", "steel", "tools", "motors", "auto", "paper", "plastics"]);
+
+// Share of the vendor's (weighted) tokens that appear in the bank narration — exactly, with a small typo /
+// truncation, or run together as UPI/IMPS payees often are ("VIKRAMTEXTILES"). Containment, not whole-string distance.
 export function vendorSimilarity(vendor: string, narration: string): number {
   const vt = tokens(vendor);
   const nt = tokens(narration);
   if (vt.length === 0 || nt.length === 0) return 0;
-  let hit = 0;
+  const compact = narration.toLowerCase().replace(/[^a-z0-9]+/g, "");
+  const vendorCompact = vt.join("");
+  if (vendorCompact.length >= 6 && compact.includes(vendorCompact)) return 1;
+  let hit = 0, total = 0;
   for (const v of vt) {
+    const w = GENERIC.has(v) ? 0.4 : 1;
+    total += w;
     let best = 0;
     for (const n of nt) {
       if (n === v) { best = 1; break; }
       if (v.length >= 4 && (n.startsWith(v) || v.startsWith(n)) && Math.min(n.length, v.length) >= 4) best = Math.max(best, 0.9);
       else best = Math.max(best, levenshteinRatio(v, n) >= 0.8 ? 0.8 : 0);
     }
-    hit += best;
+    if (best === 0 && v.length >= 4 && compact.includes(v)) best = 0.9;
+    hit += best * w;
   }
-  return hit / vt.length;
+  return hit / total;
 }
 
 function referenceHit(invoiceNumber: string | undefined, narration: string): boolean {
@@ -293,10 +305,10 @@ export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresho
     // An invoice-number hit in the narration is decisive and clears it.
     const rivals = c.ref ? 0 : perInv[i]!.filter((x) => x !== c && c.score - x.score < 0.03).length + (perBank.get(c.bank) ?? []).filter((x) => x !== c && !x.ref && c.score - x.score < 0.03).length;
     const identity = c.ref || c.vendor >= 0.6;
-    if (c.tier === "EXACT" && identity && c.score >= thresholds.autoApproveThreshold - 0.15 && rivals === 0) {
+    if (c.tier === "EXACT" && identity && c.score >= thresholds.autoApproveThreshold - 0.25 && rivals === 0) {
       return { documentId: inv.documentId, matchedBankTransactionId: bank.transactionId, score: c.score, status: "RECONCILED", reason: `Matched "${bank.narration}" (${pct}): exact amount${c.ref ? ", invoice number in narration" : ""}, vendor similarity ${(c.vendor * 100).toFixed(0)}%, ${c.days} day(s) apart` };
     }
     const why = c.tier === "NET_OF_TDS" ? "amount equals invoice net of a standard TDS rate" : c.tier === "NEAR" ? "amount differs slightly (bank charges / rounding?)" : rivals > 0 ? "more than one equally good candidate" : !identity ? "amount matches but vendor/reference does not" : "confidence below auto-approve";
-    return { documentId: inv.documentId, matchedBankTransactionId: null, score: c.score, status: "MANUAL_REVIEW", reason: `Best candidate "${bank.narration}" scored ${pct} — needs a human check: ${why}` };
+    return { documentId: inv.documentId, matchedBankTransactionId: null, candidateBankTransactionId: bank.transactionId, score: c.score, status: "MANUAL_REVIEW", reason: `Best candidate "${bank.narration}" scored ${pct} — needs a human check: ${why}` };
   });
 }
