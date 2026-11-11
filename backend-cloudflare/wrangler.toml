@@ -59,6 +59,7 @@ dead_letter_queue = "ocr-queue-dlq"
 queue = "reconcile-queue"
 max_batch_size = 5
 max_retries = 3
+max_batch_timeout = 1
 dead_letter_queue = "reconcile-queue-dlq"
 
 [[queues.consumers]]
@@ -70,13 +71,15 @@ dead_letter_queue = "gst-queue-dlq"
 [[queues.consumers]]
 queue = "tax-identifier-queue"
 max_batch_size = 5
-max_retries = 3
+max_retries = 6
+max_batch_timeout = 1
 dead_letter_queue = "tax-identifier-queue-dlq"
 
 [[queues.consumers]]
 queue = "bank-account-queue"
 max_batch_size = 5
-max_retries = 3
+max_retries = 6
+max_batch_timeout = 1
 dead_letter_queue = "bank-account-queue-dlq"
 
 
