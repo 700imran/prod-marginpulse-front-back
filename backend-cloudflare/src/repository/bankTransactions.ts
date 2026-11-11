@@ -36,19 +36,22 @@ export interface NewBankTransaction {
 // HandleBankCSVUpload). One multi-row INSERT beats N round trips —
 // postgres.js's sql(array, ...columns) helper builds the column list
 // and VALUES rows together.
-export async function bulkInsertBankTransactions(sql: Sql, rows: NewBankTransaction[]): Promise<number> {
+export async function bulkInsertBankTransactions(sql: Sql, rows: NewBankTransaction[], chunk = 1500): Promise<number> {
   if (rows.length === 0) return 0;
-  const values = rows.map((r) => ({
-    tenant_id: r.tenantId,
-    bank_reference: r.bankReference ?? null,
-    narration: r.narration ?? null,
-    transaction_date: r.transactionDate,
-    debit_amount: r.debitAmount,
-    credit_amount: r.creditAmount,
-    bank_name: r.bankName ?? null,
-    source_filename: r.sourceFilename ?? null,
-  }));
-  await sql`insert into bank_transactions ${sql(values, "tenant_id", "bank_reference", "narration", "transaction_date", "debit_amount", "credit_amount", "bank_name", "source_filename")}`;
+  // Chunked: one statement may carry at most 65,534 bind parameters.
+  for (let i = 0; i < rows.length; i += chunk) {
+    const values = rows.slice(i, i + chunk).map((r) => ({
+      tenant_id: r.tenantId,
+      bank_reference: r.bankReference ?? null,
+      narration: r.narration ?? null,
+      transaction_date: r.transactionDate,
+      debit_amount: r.debitAmount,
+      credit_amount: r.creditAmount,
+      bank_name: r.bankName ?? null,
+      source_filename: r.sourceFilename ?? null,
+    }));
+    await sql`insert into bank_transactions ${sql(values, "tenant_id", "bank_reference", "narration", "transaction_date", "debit_amount", "credit_amount", "bank_name", "source_filename")}`;
+  }
   return rows.length;
 }
 

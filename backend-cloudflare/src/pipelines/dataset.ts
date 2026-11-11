@@ -405,3 +405,30 @@ export function normaliseDataset(rows: unknown[][], forceType?: DatasetType): No
   if (out.rowsSkipped > 0) out.warnings.push(`${out.rowsSkipped} row(s) skipped (no valid date or amount).`);
   return out;
 }
+
+// ── multi-sheet workbooks ───────────────────────────────────────────────
+// A bank workbook often has one sheet per month; a GSTR-2B workbook has B2B / B2BA / CDNR sheets plus a cover sheet.
+// Every sheet is analysed on its own; sheets of the same family as the biggest one are merged, the rest are
+// skipped with a note (cover pages, summaries, a stray invoice sheet inside a bank workbook, …).
+const family = (t: DatasetType) => (t === "BANK_STATEMENT" ? "BANK" : t === "GENERIC" ? "NONE" : "INVOICE");
+
+export function normaliseWorkbook(sheets: { name: string; rows: unknown[][] }[], forceType?: DatasetType): NormalisedDataset | null {
+  if (sheets.length === 1) return normaliseDataset(sheets[0]!.rows, forceType);
+  const parsed = sheets.map((s) => ({ name: s.name, d: normaliseDataset(s.rows, forceType) }));
+  const usable = parsed.filter((x) => x.d && x.d.datasetType !== "GENERIC" && x.d.bank.length + x.d.invoices.length > 0);
+  if (usable.length === 0) return parsed.find((x) => x.d)?.d ?? null;
+  const size = (d: NormalisedDataset) => d.bank.length + d.invoices.length;
+  const lead = [...usable].sort((a, b) => size(b.d!) - size(a.d!))[0]!;
+  const same = usable.filter((x) => family(x.d!.datasetType) === family(lead.d!.datasetType));
+  const merged: NormalisedDataset = { datasetType: lead.d!.datasetType, bank: [], invoices: [], rowsRead: 0, rowsSkipped: 0, warnings: [], inferred: same.some((x) => x.d!.inferred) };
+  for (const x of same) {
+    merged.bank.push(...x.d!.bank); merged.invoices.push(...x.d!.invoices);
+    merged.rowsRead += x.d!.rowsRead; merged.rowsSkipped += x.d!.rowsSkipped;
+    for (const w of x.d!.warnings) if (!/skipped \(no valid date/.test(w) && !merged.warnings.includes(`[${x.name}] ${w}`)) merged.warnings.push(`[${x.name}] ${w}`);
+  }
+  merged.warnings.unshift(`Read ${same.length} sheet(s): ${same.map((x) => x.name).join(", ")}.`);
+  const skipped = parsed.filter((x) => !same.includes(x as any)).map((x) => x.name);
+  if (skipped.length) merged.warnings.push(`Skipped sheet(s) that are not part of this dataset: ${skipped.join(", ")}.`);
+  if (merged.rowsSkipped > 0) merged.warnings.push(`${merged.rowsSkipped} row(s) skipped (no valid date or amount).`);
+  return merged;
+}

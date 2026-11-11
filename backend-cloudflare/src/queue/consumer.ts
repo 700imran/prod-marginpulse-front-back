@@ -17,12 +17,17 @@ import { appendAuditLog } from "../repository/auditLog";
 import { getTaxIdentifierById, updateTaxIdentifierVerification } from "../repository/taxIdentifiers";
 import { getBankAccountById, updateBankAccountVerification } from "../repository/bankAccounts";
 import { decryptField } from "../security/fieldEncryption";
+import { reconcileTenant } from "../pipelines/tenantReconcile";
 
 interface TaskMessage {
   task: string;
   job_id: string;
   args: Record<string, any>;
 }
+
+// Thrown by a task when the failure is the OUTSIDE world being slow/down (timeout, 429, 5xx) rather than a bug or a
+// real rejection. The message is retried with exponential backoff instead of being recorded as a permanent failure.
+export class TransientTaskError extends Error {}
 
 function argStr(args: Record<string, any>, key: string): string {
   return typeof args[key] === "string" ? args[key] : "";
@@ -94,7 +99,7 @@ async function checkForDuplicateInvoice(sql: ReturnType<typeof getDb>, tenantId:
   }
 }
 
-async function runReconciliation(env: Env, sqlIn: ReturnType<typeof getDb> | null, args: Record<string, any>): Promise<void> {
+export async function runReconciliation(env: Env, sqlIn: ReturnType<typeof getDb> | null, args: Record<string, any>): Promise<void> {
   const documentId = argStr(args, "document_id");
   const tenantId = argStr(args, "tenant_id");
   const sql = sqlIn ?? getDb(env);
@@ -217,35 +222,65 @@ async function verifyBankAccountTask(env: Env, args: Record<string, any>): Promi
   }
 }
 
-const TASK_REGISTRY: Record<string, (env: Env, args: Record<string, any>) => Promise<void>> = {
+// One global reconcile pass for a tenant (enqueued by POST /reconciliation/run). Idempotent: re-running it on
+// already-reconciled data changes nothing, so a retried or duplicated message is harmless.
+async function reconcileTenantTask(env: Env, args: Record<string, any>): Promise<void> {
+  const tenantId = argStr(args, "tenant_id");
+  const sql = getDb(env);
+  try {
+    const tally = await reconcileTenant(sql, tenantId);
+    console.log("tenant_reconciliation_completed", { tenantId, ...tally });
+  } finally {
+    await sql.end();
+  }
+}
+
+export const TASK_REGISTRY: Record<string, (env: Env, args: Record<string, any>) => Promise<void>> = {
   run_ocr_pipeline: runOCRPipeline,
   run_reconciliation: (env, args) => runReconciliation(env, null, args),
+  reconcile_tenant: reconcileTenantTask,
   sync_gst_portal: syncGSTPortal,
   verify_tax_identifier: verifyTaxIdentifierTask,
   verify_bank_account_task: verifyBankAccountTask,
 };
 
-// Cloudflare Queues consumer entry point — wired up from src/index.ts's
-// exported `queue()` handler. Each message is acked/retried
-// individually (message.ack() / message.retry()), same effect as SQS's
-// per-item BatchItemFailures.
-export async function handleQueueBatch(batch: MessageBatch<TaskMessage>, env: Env): Promise<void> {
-  for (const message of batch.messages) {
-    const msg = message.body;
-    const taskFn = TASK_REGISTRY[msg.task];
-    if (!taskFn) {
-      console.error("unknown_task", { task: msg.task, jobId: msg.job_id });
-      message.ack(); // unknown task type — don't retry forever, drop it
-      continue;
-    }
-    console.log("task_started", { task: msg.task, jobId: msg.job_id });
-    try {
-      await taskFn(env, msg.args);
-      console.log("task_completed", { task: msg.task, jobId: msg.job_id });
-      message.ack();
-    } catch (e) {
-      console.error("task_failed", { task: msg.task, jobId: msg.job_id, error: (e as Error).message });
-      message.retry();
-    }
+// Cloudflare Queues consumer entry point — wired up from src/index.ts's exported `queue()` handler.
+// Each message is acked/retried individually. Messages in a batch run CONCURRENTLY (allSettled): one slow
+// message — e.g. a hung bank/GST provider call — can no longer hold every other message in the batch hostage.
+// Failures retry with exponential backoff (10 s, 20 s, 40 s … capped at 15 min) so a struggling provider isn't hammered.
+const MAX_TRANSIENT_ATTEMPTS = 6;
+const backoff = (attempts: number) => Math.min(900, 10 * 2 ** Math.min(Math.max(attempts - 1, 0), 6));
+
+async function handleOne(message: Message<TaskMessage>): Promise<void> {
+  const msg = message.body;
+  const taskFn = TASK_REGISTRY[msg.task];
+  if (!taskFn) {
+    console.error("unknown_task", { task: msg.task, jobId: msg.job_id });
+    message.ack(); // unknown task type — don't retry forever, drop it
+    return;
   }
+  const attempts = message.attempts ?? 1;
+  console.log("task_started", { task: msg.task, jobId: msg.job_id, attempts });
+  try {
+    await taskFn(currentEnv!, msg.args);
+    console.log("task_completed", { task: msg.task, jobId: msg.job_id });
+    message.ack();
+  } catch (e) {
+    const transient = e instanceof TransientTaskError;
+    if (transient && attempts >= MAX_TRANSIENT_ATTEMPTS) {
+      // The provider stayed down for the whole retry budget. The record stays PENDING (never marked FAILED) so the
+      // user can re-verify later; acking stops the infinite loop.
+      console.error("task_gave_up", { task: msg.task, jobId: msg.job_id, attempts, error: (e as Error).message });
+      message.ack();
+      return;
+    }
+    console.error("task_failed", { task: msg.task, jobId: msg.job_id, attempts, transient, error: (e as Error).message });
+    message.retry({ delaySeconds: backoff(attempts) });
+  }
+}
+
+let currentEnv: Env | null = null;
+export async function handleQueueBatch(batch: MessageBatch<TaskMessage>, env: Env): Promise<void> {
+  currentEnv = env;
+  await Promise.allSettled(batch.messages.map((m) => handleOne(m)));
 }

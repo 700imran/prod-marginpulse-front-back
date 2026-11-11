@@ -215,6 +215,47 @@ export async function listAllForExport(sql: Sql, tenantId: string): Promise<Docu
   return sql.unsafe<DocumentRow[]>(`select ${SELECT} from documents where tenant_id = $1 order by created_at asc`, [tenantId]);
 }
 
+// Keyset page for the report export. Rows from one bulk INSERT share created_at (same transaction timestamp), so the
+// document_id tie-breaker is what makes the cursor total-ordered. The cursor carries created_at as TEXT: a JS Date
+// would truncate Postgres' microseconds and skip or repeat rows at page boundaries.
+export async function exportPage(sql: Sql, tenantId: string, cursor: { ts: string; id: string } | null, limit: number): Promise<{ rows: DocumentRow[]; next: { ts: string; id: string } | null }> {
+  const rows = cursor
+    ? await sql.unsafe<(DocumentRow & { cursorTs: string })[]>(
+        `select ${SELECT}, created_at::text as "cursorTs" from documents
+         where tenant_id = $1 and (created_at, document_id) > ($2::text::timestamptz, $3::uuid)
+         order by created_at asc, document_id asc limit $4`, [tenantId, cursor.ts, cursor.id, limit])
+    : await sql.unsafe<(DocumentRow & { cursorTs: string })[]>(
+        `select ${SELECT}, created_at::text as "cursorTs" from documents where tenant_id = $1 order by created_at asc, document_id asc limit $2`, [tenantId, limit]);
+  const last = rows[rows.length - 1];
+  return { rows, next: rows.length === limit && last ? { ts: last.cursorTs, id: last.documentId } : null };
+}
+
+// Bulk insert in chunks: Postgres allows at most 65,534 bind parameters per statement, and a 5,000-row register
+// with ~15 columns would otherwise need 75,000 (MAX_PARAMETERS_EXCEEDED → HTTP 500).
+export interface NewDatasetDocument {
+  tenantId: string; docType: "INVOICE" | "CREDIT_NOTE"; originalFilename: string;
+  vendorName: string | null; documentDate: string; invoiceNumber: string | null; rawTotalAmount: number; taxAmount: number | null; taxIdentifier: string | null;
+}
+export async function bulkInsertDatasetDocuments(sql: Sql, docs: NewDatasetDocument[], chunk = 1500): Promise<number> {
+  for (let i = 0; i < docs.length; i += chunk) {
+    const values = docs.slice(i, i + chunk).map((d) => ({
+      tenant_id: d.tenantId, doc_type: d.docType, original_filename: d.originalFilename, storage_key: "", mime_type: "text/tabular", file_size_bytes: 0,
+      vendor_name: d.vendorName, document_date: d.documentDate, invoice_number: d.invoiceNumber, raw_total_amount: d.rawTotalAmount, tax_amount: d.taxAmount,
+      tax_identifier: d.taxIdentifier, ingest_channel: "WEB_UPLOAD", processing_status: "PARSED", ocr_confidence_score: 1,
+    }));
+    await sql`insert into documents ${sql(values, "tenant_id", "doc_type", "original_filename", "storage_key", "mime_type", "file_size_bytes", "vendor_name", "document_date", "invoice_number", "raw_total_amount", "tax_amount", "tax_identifier", "ingest_channel", "processing_status", "ocr_confidence_score")}`;
+  }
+  return docs.length;
+}
+
+// Existing invoices in a date window — input to duplicate detection when a register is (re-)uploaded.
+export interface ExistingInvoiceKey { vendorName: string | null; invoiceNumber: string | null; rawTotalAmount: string | null; documentDate: string | null; taxIdentifier: string | null }
+export async function listExistingInvoiceKeys(sql: Sql, tenantId: string, fromDate: string, toDate: string): Promise<ExistingInvoiceKey[]> {
+  return sql<ExistingInvoiceKey[]>`
+    select vendor_name as "vendorName", invoice_number as "invoiceNumber", raw_total_amount::text as "rawTotalAmount", document_date as "documentDate", tax_identifier as "taxIdentifier"
+    from documents where tenant_id = ${tenantId} and doc_type in ('INVOICE','CREDIT_NOTE') and document_date between ${fromDate} and ${toDate}`;
+}
+
 export async function listByStatus(sql: Sql, tenantId: string, status: string): Promise<DocumentRow[]> {
   return sql.unsafe<DocumentRow[]>(`select ${SELECT} from documents where tenant_id = $1 and processing_status = $2`, [tenantId, status]);
 }

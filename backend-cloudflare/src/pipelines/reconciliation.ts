@@ -223,14 +223,14 @@ function referenceHit(invoiceNumber: string | undefined, narration: string): boo
 }
 
 export interface EngineOptions {
-  amountTolerancePct: number; // exact tier (auto-approvable), e.g. 0.0002 = 0.02%
+  amountTolerancePct: number; // extra % allowance on top of the absolute one for the exact tier (default 0: a ₹7 difference on ₹80,000 is NOT an exact match — measured wrong auto-match at scale)
   nearTolerancePct: number; // near tier (review only), e.g. 0.005 = 0.5%
   amountToleranceAbs: number; // rupees, whichever is larger
   tdsRates: number[]; // net-of-TDS payment tiers
   daysBefore: number; // payment before invoice date
   daysAfter: number; // payment after invoice date
 }
-export const DEFAULT_ENGINE: EngineOptions = { amountTolerancePct: 0.0002, nearTolerancePct: 0.005, amountToleranceAbs: 1, tdsRates: [0.01, 0.02, 0.05, 0.1], daysBefore: 7, daysAfter: 45 };
+export const DEFAULT_ENGINE: EngineOptions = { amountTolerancePct: 0, nearTolerancePct: 0.005, amountToleranceAbs: 1, tdsRates: [0.01, 0.02, 0.05, 0.1], daysBefore: 7, daysAfter: 45 };
 
 type Tier = "EXACT" | "NEAR" | "NET_OF_TDS";
 interface Candidate { inv: number; bank: number; score: number; tier: Tier; vendor: number; ref: boolean; days: number }
@@ -272,7 +272,9 @@ export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresho
       const vendor = vendorSimilarity(inv.vendorName, b.narration);
       const ref = referenceHit(inv.invoiceNumber, b.narration);
       const dateScore = Math.exp(-0.03 * Math.abs(signed));
-      let score = 0.3 + 0.4 * vendor + 0.15 * dateScore + (ref ? 0.15 : 0);
+      // Prefer the candidate whose amount is closest: two same-vendor payments a few rupees apart must not be decided by which one is nearer in date.
+      const exactness = 1 - Math.min(1, Math.abs(inv.rawTotalAmount - b.debitAmount) / Math.max(opts.amountToleranceAbs, 1e-9));
+      let score = 0.3 + 0.4 * vendor + 0.15 * dateScore + 0.05 * exactness + (ref ? 0.15 : 0);
       if (tier !== "EXACT") score -= 0.1;
       const c: Candidate = { inv: i, bank: j, score: roundTo6(Math.min(score, 1)), tier, vendor, ref, days: Math.abs(signed) };
       cands.push(c);
