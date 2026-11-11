@@ -168,3 +168,67 @@ test("amount precision: paise survive the round trip exactly", { skip }, async (
   assert.deepEqual(got.map((g) => g.amt), ["12345.67", "0.01", "99999999.99"]);
   assert.equal(r2(0.1 + 0.2), 0.3);
 });
+
+// ── What the BROWSER actually sends (payloads produced by the frontend parser) through the real API ──────────────
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+const fixtureSheets = (name: string) => JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "frontend-parsed", `${name}.json`), "utf8")).sheets;
+const uploadSheets = (token: string, sheets: unknown, fileName: string, extra: object = {}) => h.call(token, "POST", U, { fileName, sheets, ...extra });
+
+test("multi-sheet bank workbook + GSTR-2B portal workbook (browser payloads) → right invoices matched to the right payments, credit note held out", { skip }, async () => {
+  const t = await h.newTenant("browser-payloads");
+  const bank = await uploadSheets(t.token, fixtureSheets("bank-monthly.xlsx"), "bank-fy26.xlsx", { bankName: "HDFC" });
+  assert.equal(bank.status, 201, bank.text);
+  assert.equal(bank.json.datasetType, "BANK_STATEMENT"); assert.equal(bank.json.rowsImported, 4);
+  assert.match(bank.json.warnings.join(" "), /Skipped sheet\(s\).*Summary/);
+  const gst = await uploadSheets(t.token, fixtureSheets("gstr2b-portal.xlsx"), "gstr2b-apr.xlsx");
+  assert.equal(gst.status, 201, gst.text);
+  assert.equal(gst.json.datasetType, "GST_RETURN"); assert.equal(gst.json.rowsImported, 3);
+
+  const rows = await h.admin<{ no: string; type: string; status: string; narration: string | null; gstin: string | null }[]>`
+    select d.invoice_number as no, d.doc_type as type, d.processing_status as status, b.narration, d.tax_identifier as gstin
+    from documents d left join bank_transactions b on b.transaction_id = d.matched_bank_transaction_id where d.tenant_id = ${t.tenantId} order by d.invoice_number`;
+  const by = Object.fromEntries(rows.map((r) => [r.no, r]));
+  assert.equal(by["INV-1001"]!.status, "RECONCILED"); assert.equal(by["INV-1001"]!.narration, "NEFT-ACME TRADERS-REF1");
+  assert.equal(by["SS/26/77"]!.status, "RECONCILED"); assert.equal(by["SS/26/77"]!.narration, "RTGS-SHARMA STEEL WORKS");
+  assert.equal(by["SS/26/77"]!.gstin, "08AABCS5678K1Z2");
+  assert.equal(by["CN-9"]!.type, "CREDIT_NOTE"); assert.notEqual(by["CN-9"]!.status, "RECONCILED");
+
+  const again = await uploadSheets(t.token, fixtureSheets("gstr2b-portal.xlsx"), "gstr2b-apr-again.xlsx");
+  assert.equal(again.status, 201, again.text);
+  assert.equal(again.json.rowsImported, 0); assert.equal(again.json.duplicatesSkipped, 3); // same invoices again → reported as skipped, never duplicated
+});
+
+test("Tally day-book XML + fixed-width bank + HTML-xls bank payloads import cleanly", { skip }, async () => {
+  const t = await h.newTenant("browser-payloads-2");
+  const fw = await uploadSheets(t.token, fixtureSheets("bank-fixed-width.prn"), "stmt.prn");
+  assert.equal(fw.status, 201, fw.text); assert.equal(fw.json.rowsImported, 4);
+  const html = await uploadSheets(t.token, fixtureSheets("bank-html.xls"), "netbanking.xls");
+  assert.equal(html.status, 201, html.text); assert.equal(html.json.datasetType, "BANK_STATEMENT");
+  assert.equal(html.json.duplicatesSkipped, 3 - html.json.rowsImported); // the 05-Mar ₹11,800 NEFT row is also in the fixed-width file
+  const tally = await uploadSheets(t.token, fixtureSheets("tally-daybook.xml"), "daybook.xml");
+  assert.equal(tally.status, 201, tally.text); assert.equal(tally.json.rowsImported, 2);
+  const types = await h.admin<{ t: string; n: string }[]>`select doc_type as t, count(*)::text as n from documents where tenant_id = ${t.tenantId} group by 1 order by 1`;
+  assert.deepEqual(types.map((x) => [x.t, x.n]), [["CREDIT_NOTE", "1"], ["INVOICE", "1"]]);
+});
+
+test("a sales register is refused, not imported as payables", { skip }, async () => {
+  const t = await h.newTenant("sales");
+  const r = await upload(t.token, [["GSTIN of recipient", "Customer name", "Invoice number", "Invoice type", "Invoice Date", "Invoice Value(₹)", "Taxable Value (₹)", "Integrated Tax(₹)", "Central Tax(₹)", "State/UT Tax(₹)", "Cess(₹)"],
+    ["27AAACA1234F1Z5", "ACME CUSTOMER", "S-1", "Regular", "03-04-2026", 11800, 10000, 0, 900, 900, 0]], "gstr1.xlsx");
+  assert.equal(r.status, 422); assert.match(r.json.error, /SALES \/ receivables/);
+  const n = await h.admin<{ n: string }[]>`select count(*)::text as n from documents where tenant_id = ${t.tenantId}`;
+  assert.equal(n[0]!.n, "0");
+});
+
+test("size limits: too many sheets / rows get a clear 413, empty or malformed bodies a 400", { skip }, async () => {
+  const t = await h.newTenant("limits");
+  const sheet = { name: "S", rows: [["Date", "Narration", "Debit"], ["01/04/2026", "x", 1]] };
+  assert.equal((await uploadSheets(t.token, Array.from({ length: 41 }, () => sheet), "many.xlsx")).status, 413);
+  const big = { name: "Big", rows: [["Date", "Narration", "Debit"], ...Array.from({ length: 20_100 }, (_, i) => ["01/04/2026", `n${i}`, 1])] };
+  const tooBig = await uploadSheets(t.token, [big], "big.csv");
+  assert.equal(tooBig.status, 413); assert.match(tooBig.json.error, /too many rows/);
+  assert.equal((await h.call(t.token, "POST", U, { fileName: "x", rows: [] })).status, 400);
+  assert.equal((await h.call(t.token, "POST", U, { fileName: "x" })).status, 400);
+});

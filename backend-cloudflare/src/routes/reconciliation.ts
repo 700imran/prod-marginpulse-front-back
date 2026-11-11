@@ -143,6 +143,10 @@ reconciliationRoutes.post("/dataset-upload", rateLimit("dataset", 20, 60), async
   if (!data) return c.json({ error: "Could not find a header row. Expected columns like Date, Narration/Description, Debit/Credit or Invoice No, Party, Amount." }, 422);
   if (data.bank.length + data.invoices.length === 0) return c.json({ error: data.warnings.join(" ") || "No usable rows found" }, 422);
   if (data.datasetType === "GENERIC") return c.json({ error: data.warnings[0] }, 422);
+  // A customer-side register would be stored as payables: it would inflate ITC-at-risk and compete with real vendor
+  // invoices for bank payments. Customer-receipt reconciliation does not exist yet, so refuse clearly instead of
+  // importing it with a footnote. (An explicit datasetType from the caller is respected.)
+  if (data.salesRegister && !forced) return c.json({ error: "This looks like a SALES / receivables register (customer invoices). Customer receipts are not reconciled yet, so it was not imported. Upload your purchase register, GSTR-2B or GSTR-2A for payables reconciliation." }, 422);
 
   const tenantId = c.get("tenant").tenantId;
   const sql = c.get("sql");
@@ -172,7 +176,7 @@ reconciliationRoutes.post("/dataset-upload", rateLimit("dataset", 20, 60), async
   } else {
     const dates = data.invoices.map((r) => r.date).sort();
     const existing = await listExistingInvoiceKeys(sql, tenantId, dates[0]!, dates[dates.length - 1]!);
-    const dedupe = makeInvoiceDeduper(existing.map((e) => ({ vendor: e.vendorName ?? "", invoiceNo: e.invoiceNumber ?? "", total: parseFloat(e.rawTotalAmount ?? "0") || 0, date: e.documentDate ?? "", gstin: e.taxIdentifier ?? "", docType: "INVOICE" })));
+    const dedupe = makeInvoiceDeduper(existing.map((e) => ({ vendor: e.vendorName ?? "", invoiceNo: e.invoiceNumber ?? "", total: parseFloat(e.rawTotalAmount ?? "0") || 0, date: e.documentDate ?? "", gstin: e.taxIdentifier ?? "", docType: e.docType === "CREDIT_NOTE" ? "CREDIT_NOTE" : "INVOICE" })));
     const fresh = data.invoices.filter((r) => !dedupe.seen({ vendor: r.vendor, invoiceNo: r.invoiceNo, total: r.total, date: r.date, gstin: r.gstin, docType: r.docType === "CREDIT_NOTE" ? "CREDIT_NOTE" : "INVOICE" }));
     duplicates = data.invoices.length - fresh.length;
     created = await bulkInsertDatasetDocuments(sql, fresh.map((r) => ({

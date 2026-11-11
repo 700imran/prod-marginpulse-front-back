@@ -1,0 +1,33 @@
+{
+ "sheets": [
+  {
+   "name": "Bills",
+   "rows": [
+    [
+     "Bill Date",
+     "Bill Number",
+     "Vendor Name",
+     "Sub Total",
+     "Tax Amount",
+     "Total"
+    ],
+    [
+     "2026-04-01",
+     "B-1",
+     "Delta Office Supplies",
+     1000,
+     180,
+     1180
+    ],
+    [
+     "2026-04-02",
+     "B-2",
+     "Nova Print Solutions",
+     2000.5,
+     360.09,
+     2360.59
+    ]
+   ]
+  }
+ ]
+}

@@ -1,0 +1,109 @@
+{
+ "sheets": [
+  {
+   "name": "Read me",
+   "rows": [
+    [
+     "Instructions for GSTR-2B"
+    ],
+    [
+     "This sheet explains the layout."
+    ]
+   ]
+  },
+  {
+   "name": "B2B",
+   "rows": [
+    [
+     "GSTIN of supplier",
+     "Trade/Legal name",
+     "Invoice details",
+     "",
+     "",
+     "",
+     "Place of supply",
+     "Supply Attract Reverse Charge",
+     "Taxable Value (₹)",
+     "Tax Amount",
+     "",
+     "",
+     ""
+    ],
+    [
+     "",
+     "",
+     "Invoice number",
+     "Invoice type",
+     "Invoice Date",
+     "Invoice Value(₹)",
+     "",
+     "",
+     "",
+     "Integrated Tax(₹)",
+     "Central Tax(₹)",
+     "State/UT Tax(₹)",
+     "Cess(₹)"
+    ],
+    [
+     "27AAACA1234F1Z5",
+     "ACME TRADERS PVT LTD",
+     "INV-1001",
+     "Regular",
+     "03-04-2026",
+     11800,
+     "27-Maharashtra",
+     "No",
+     10000,
+     0,
+     900,
+     900,
+     0
+    ],
+    [
+     "08AABCS5678K1Z2",
+     "SHARMA STEEL WORKS",
+     "SS/26/77",
+     "Regular",
+     "28-04-2026",
+     59000,
+     "27-Maharashtra",
+     "No",
+     50000,
+     9000,
+     0,
+     0,
+     0
+    ]
+   ]
+  },
+  {
+   "name": "CDNR",
+   "rows": [
+    [
+     "GSTIN of supplier",
+     "Trade/Legal name",
+     "Note number",
+     "Note type",
+     "Note Date",
+     "Note Value(₹)",
+     "Taxable Value (₹)",
+     "Integrated Tax(₹)",
+     "Central Tax(₹)",
+     "State/UT Tax(₹)"
+    ],
+    [
+     "27AAACA1234F1Z5",
+     "ACME TRADERS PVT LTD",
+     "CN-9",
+     "Credit note",
+     "15-05-2026",
+     2360,
+     2000,
+     0,
+     180,
+     180
+    ]
+   ]
+  }
+ ]
+}

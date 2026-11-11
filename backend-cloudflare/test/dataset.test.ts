@@ -67,3 +67,47 @@ test("end to end: invoice register + bank statement grids reconcile", () => {
   assert.equal(res[0]!.matchedBankTransactionId, "b0");
   assert.notEqual(res[1]!.status, "RECONCILED"); // same amount, different payee → never auto-approved
 });
+
+// ── Books ledgers and sales registers must not be mistaken for bank movements / payables ─────────────────────
+test("Tally day-book: only bank-type vouchers become bank rows; Sales / Purchase / Journal are ignored", () => {
+  const grid = [
+    ["Date", "Particulars", "Vch Type", "Vch No.", "Debit", "Credit"],
+    ["01-04-2026", "Customer One", "Sales", "S-1", 11800, ""],
+    ["02-04-2026", "Customer One", "Receipt", "R-1", 11800, ""],     // books view: Debit = money in
+    ["03-04-2026", "Acme Traders", "Purchase", "P-1", "", 5900],
+    ["04-04-2026", "Acme Traders", "Payment", "PM-1", "", 5900],     // books view: Credit = money out
+    ["05-04-2026", "Adjustment", "Journal", "J-1", 100, ""],
+  ];
+  const d = normaliseDataset(grid)!;
+  assert.equal(d.datasetType, "BANK_STATEMENT");
+  assert.deepEqual(d.bank.map((b) => [b.date, b.debit, b.credit]), [["2026-04-02", 0, 11800], ["2026-04-04", 5900, 0]]);
+  assert.match(d.warnings.join(" "), /3 non-bank voucher/);
+});
+
+test("a bank ledger whose voucher types are all Payment / Receipt / Contra keeps every row", () => {
+  const grid = [["Date", "Particulars", "Vch Type", "Debit", "Credit"], ["01-04-2026", "X", "Receipt", 10, ""], ["02-04-2026", "Y", "Payment", "", 20], ["03-04-2026", "Cash", "Contra", "", 30]];
+  const d = normaliseDataset(grid)!;
+  assert.equal(d.bank.length, 3);
+  assert.doesNotMatch(d.warnings.join(" "), /non-bank/);
+});
+
+test("sales registers are flagged (so the API can refuse them instead of importing customers as payables)", () => {
+  const gstr1 = [["GSTIN of recipient", "Customer name", "Invoice number", "Invoice type", "Invoice Date", "Invoice Value(₹)", "Taxable Value (₹)", "Integrated Tax(₹)", "Central Tax(₹)", "State/UT Tax(₹)", "Cess(₹)"],
+    ["27AAACA1234F1Z5", "ACME CUSTOMER", "S-1", "Regular", "03-04-2026", 11800, 10000, 0, 900, 900, 0]];
+  assert.equal(normaliseDataset(gstr1)!.salesRegister, true);
+  assert.equal(normaliseDataset([["Invoice No", "Customer", "Invoice Date", "Amount"], ["S-1", "C1", "01-04-2026", 100]])!.salesRegister, true);
+  assert.equal(normaliseDataset([["Invoice No", "Supplier", "Invoice Date", "Amount"], ["P-1", "V1", "01-04-2026", 100]])!.salesRegister ?? false, false);
+  assert.equal(normaliseDataset([["GSTIN of supplier", "Trade name", "Invoice number", "Invoice Date", "Invoice Value(₹)"], ["27AAACA1234F1Z5", "ACME", "P-1", "03-04-2026", 100]])!.salesRegister ?? false, false);
+});
+
+test("GSTR-2B (supplier-side) is never mistaken for a sales register just because a column says GSTR-1 Period", () => {
+  const grid = [
+    ["GSTIN of supplier", "Trade/Legal name", "Invoice details", "", "", "", "Taxable Value (₹)", "Tax Amount", "", "", "", "GSTR-1/1A/IFF/GSTR-5 Period"],
+    ["", "", "Invoice number", "Invoice type", "Invoice Date", "Invoice Value(₹)", "", "Integrated Tax(₹)", "Central Tax(₹)", "State/UT Tax(₹)", "Cess(₹)", ""],
+    ["24AAACP6789C1Z8", "Patel Chemicals Ltd", "INV1", "Regular", "03-06-2026", 59176.4, 50149.49, 0, 4513.46, 4513.46, 0, "Apr-26"],
+  ];
+  const d = normaliseDataset(grid)!;
+  assert.equal(d.datasetType, "GST_RETURN");
+  assert.ok(!d.salesRegister);
+  assert.equal(d.invoices.length, 1);
+});

@@ -1,0 +1,51 @@
+{
+ "sheets": [
+  {
+   "name": "Sheet1",
+   "rows": [
+    [
+     "ACME BANK",
+     "-",
+     "ACCOUNT STATEMENT",
+     ""
+    ],
+    [
+     "Date",
+     "Narration",
+     "Debit",
+     "Credit"
+    ],
+    [
+     "05/03/2026",
+     "NEFT-ACME TRADERS",
+     "11,800.00",
+     ""
+    ],
+    [
+     "06/03/2026",
+     "UPI-CUSTOMER ONE",
+     "",
+     "5,000.00"
+    ],
+    [
+     "07/03/2026",
+     "NEFT-BETA LLP",
+     "2,500.00",
+     ""
+    ],
+    [
+     "08/03/2026",
+     "INT CREDIT",
+     "",
+     "12.00"
+    ],
+    [
+     "Page 1 of 1",
+     "",
+     "",
+     ""
+    ]
+   ]
+  }
+ ]
+}

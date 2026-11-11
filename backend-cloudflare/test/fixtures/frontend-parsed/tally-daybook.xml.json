@@ -1,0 +1,33 @@
+{
+ "sheets": [
+  {
+   "name": "Vouchers",
+   "rows": [
+    [
+     "Date",
+     "Voucher Type",
+     "Voucher No.",
+     "Party Name",
+     "Amount",
+     "Narration"
+    ],
+    [
+     "20260405",
+     "Purchase",
+     "P-1",
+     "Acme Traders",
+     11800,
+     "Goods"
+    ],
+    [
+     "20260407",
+     "Debit Note",
+     "DN-1",
+     "Acme Traders",
+     500,
+     ""
+    ]
+   ]
+  }
+ ]
+}

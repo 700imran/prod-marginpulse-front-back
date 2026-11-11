@@ -293,6 +293,10 @@ export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresho
     usedBank.add(c.bank);
   }
 
+  // Decisive evidence: bank rows / invoices tied together by an invoice number written in the narration.
+  const refBanks = new Set<number>(); const refInvs = new Set<number>();
+  for (const x of cands) if (x.ref) { refBanks.add(x.bank); refInvs.add(x.inv); }
+
   return invoices.map((inv, i): MatchResult => {
     if (!inv.documentDate || !(inv.rawTotalAmount > 0)) {
       return { documentId: inv.documentId, matchedBankTransactionId: null, score: 0, status: "FAILED", reason: "Missing amount or date for matching" };
@@ -305,7 +309,15 @@ export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresho
     const pct = `${(c.score * 100).toFixed(0)}%`;
     // Ambiguity: another bank row fits this invoice about as well, or another invoice competes for this bank row.
     // An invoice-number hit in the narration is decisive and clears it.
-    const rivals = c.ref ? 0 : perInv[i]!.filter((x) => x !== c && c.score - x.score < 0.03).length + (perBank.get(c.bank) ?? []).filter((x) => x !== c && !x.ref && c.score - x.score < 0.03).length;
+    // A competitor is anything of the SAME amount tier whose payee/vendor evidence is about as strong — date proximity is
+    // deliberately NOT a tie-breaker: for identical invoices (rent, retainers, repeat orders) the payment that happens to be
+    // nearer in time is the wrong one often enough (≈5% measured) that guessing is not acceptable for an auto-approval.
+    // A competitor is cleared only by decisive evidence: its bank row is named by ANOTHER invoice's number, or its invoice
+    // already has an invoice-number hit.
+    const band = (x: Candidate) => x.tier === c.tier && Math.abs(x.vendor - c.vendor) < 0.2;
+    const rivals = c.ref ? 0
+      : perInv[i]!.filter((x) => x !== c && band(x) && !refBanks.has(x.bank)).length
+      + (perBank.get(c.bank) ?? []).filter((x) => x !== c && !x.ref && band(x) && !refInvs.has(x.inv)).length;
     const identity = c.ref || c.vendor >= 0.6;
     if (c.tier === "EXACT" && identity && c.score >= thresholds.autoApproveThreshold - 0.25 && rivals === 0) {
       return { documentId: inv.documentId, matchedBankTransactionId: bank.transactionId, score: c.score, status: "RECONCILED", reason: `Matched "${bank.narration}" (${pct}): exact amount${c.ref ? ", invoice number in narration" : ""}, vendor similarity ${(c.vendor * 100).toFixed(0)}%, ${c.days} day(s) apart` };

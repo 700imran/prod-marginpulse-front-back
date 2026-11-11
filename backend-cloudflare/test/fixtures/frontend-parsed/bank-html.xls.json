@@ -1,0 +1,37 @@
+{
+ "sheets": [
+  {
+   "name": "Table1",
+   "rows": [
+    [
+     "Txn Date",
+     "Description",
+     "Withdrawals",
+     "Deposits",
+     "Balance"
+    ],
+    [
+     "05-03-2026",
+     "NEFT-ACME TRADERS",
+     "11,800.00",
+     "",
+     "88,200.00"
+    ],
+    [
+     "06-03-2026",
+     "UPI-CUSTOMER ONE",
+     "",
+     "5,000.00",
+     "93,200.00"
+    ],
+    [
+     "07-03-2026",
+     "NEFT-BETA LLP",
+     "2,500.00",
+     "",
+     "90,700.00"
+    ]
+   ]
+  }
+ ]
+}

@@ -249,10 +249,10 @@ export async function bulkInsertDatasetDocuments(sql: Sql, docs: NewDatasetDocum
 }
 
 // Existing invoices in a date window — input to duplicate detection when a register is (re-)uploaded.
-export interface ExistingInvoiceKey { vendorName: string | null; invoiceNumber: string | null; rawTotalAmount: string | null; documentDate: string | null; taxIdentifier: string | null }
+export interface ExistingInvoiceKey { vendorName: string | null; invoiceNumber: string | null; rawTotalAmount: string | null; documentDate: string | null; taxIdentifier: string | null; docType: string }
 export async function listExistingInvoiceKeys(sql: Sql, tenantId: string, fromDate: string, toDate: string): Promise<ExistingInvoiceKey[]> {
   return sql<ExistingInvoiceKey[]>`
-    select vendor_name as "vendorName", invoice_number as "invoiceNumber", raw_total_amount::text as "rawTotalAmount", document_date as "documentDate", tax_identifier as "taxIdentifier"
+    select vendor_name as "vendorName", invoice_number as "invoiceNumber", raw_total_amount::text as "rawTotalAmount", document_date as "documentDate", tax_identifier as "taxIdentifier", doc_type as "docType"
     from documents where tenant_id = ${tenantId} and doc_type in ('INVOICE','CREDIT_NOTE') and document_date between ${fromDate} and ${toDate}`;
 }
 

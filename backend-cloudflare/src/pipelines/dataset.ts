@@ -239,7 +239,9 @@ function findHeader(rows: unknown[][]): HeaderCandidate | null {
   return best;
 }
 
-const SALES_PREAMBLE = /sales\s+register|sale\s+register|outward\s+suppl|gstr[\s-]*1\b|sales\s+invoice|receivable/i;
+// NB: a bare "GSTR-1" is NOT a sales signal — every GSTR-2B / 2A carries a "GSTR-1/1A/IFF/GSTR-5 Period" column
+// (the period in which the SUPPLIER filed). Outward-supply files are caught by their wording or by recipient/customer headers.
+const SALES_PREAMBLE = /sales\s+register|sale\s+register|outward\s+suppl|sales\s+invoice|receivable/i;
 
 export function analyseTable(rows: unknown[][]): TableAnalysis | null {
   const warnings: string[] = [];
@@ -319,11 +321,15 @@ export interface NormalisedDataset {
   rowsSkipped: number;
   warnings: string[];
   inferred?: boolean;
+  /** Customer-side (sales / outward-supply) register — the API refuses these rather than importing customers as payables. */
+  salesRegister?: boolean;
 }
 
 const GSTIN_RE = /^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const DEBIT_WORD = /^(dr|d|debit|withdrawal|w|paid|sent|payment|out|pmt|purchase)\b/i;
 const CREDIT_WORD = /^(cr|c|credit|deposit|received|receipt|in|rcpt|refund)\b/i;
+// Tally-style ledgers / day-books mix every voucher type. Only money-movement vouchers are bank rows.
+const NON_BANK_VOUCHER = /\b(sales?|purchases?|journal|jv|debit\s*note|credit\s*note|memo|stock|delivery|receipt\s*note|rejection|physical|manufactur|reversing|memorandum)\b/i;
 const NOTE_WORD = /credit\s*note|debit\s*note|\bcdn[rn]?\b|credit\s*memo|\bnote\b|^c$|^d$|purchase\s*return|sales\s*return/i;
 
 export function normaliseDataset(rows: unknown[][], forceType?: DatasetType): NormalisedDataset | null {
@@ -331,7 +337,8 @@ export function normaliseDataset(rows: unknown[][], forceType?: DatasetType): No
   if (!a) return null;
   const type = forceType ?? a.datasetType;
   const m = a.mapping;
-  const out: NormalisedDataset = { datasetType: type, bank: [], invoices: [], rowsRead: 0, rowsSkipped: 0, warnings: [...a.warnings], inferred: a.inferred };
+  const out: NormalisedDataset = { datasetType: type, bank: [], invoices: [], rowsRead: 0, rowsSkipped: 0, warnings: [...a.warnings], inferred: a.inferred, salesRegister: a.salesHint && type !== "BANK_STATEMENT" };
+  let nonBank = 0;
   const body = rows.slice(a.headerRow + 1);
   const cell = (r: unknown[], f: Field) => (m[f] === undefined ? undefined : r[m[f]!]);
   const text = (r: unknown[], f: Field) => cellStr(cell(r, f));
@@ -363,6 +370,7 @@ export function normaliseDataset(rows: unknown[][], forceType?: DatasetType): No
     if (!date) { out.rowsSkipped++; continue; } // totals / footers / junk lines
 
     if (type === "BANK_STATEMENT") {
+      if (a.booksView && NON_BANK_VOUCHER.test(text(r, "drCr"))) { nonBank++; continue; }
       let debit = 0, credit = 0;
       if (m.debit !== undefined || m.credit !== undefined) {
         debit = Math.abs(parseAmount(cell(r, "debit")));
@@ -399,6 +407,7 @@ export function normaliseDataset(rows: unknown[][], forceType?: DatasetType): No
       });
     }
   }
+  if (nonBank > 0) out.warnings.push(`${nonBank} non-bank voucher row(s) (Sales / Purchase / Journal …) were ignored — only payment, receipt and contra entries are bank movements.`);
   const notes = out.invoices.filter((i) => i.docType === "CREDIT_NOTE").length;
   if (notes > 0) out.warnings.push(`${notes} credit / debit note(s) were stored but are not matched against payments.`);
   if (out.bank.length + out.invoices.length === 0) out.warnings.push("No usable data rows found under the detected header.");
@@ -420,7 +429,7 @@ export function normaliseWorkbook(sheets: { name: string; rows: unknown[][] }[],
   const size = (d: NormalisedDataset) => d.bank.length + d.invoices.length;
   const lead = [...usable].sort((a, b) => size(b.d!) - size(a.d!))[0]!;
   const same = usable.filter((x) => family(x.d!.datasetType) === family(lead.d!.datasetType));
-  const merged: NormalisedDataset = { datasetType: lead.d!.datasetType, bank: [], invoices: [], rowsRead: 0, rowsSkipped: 0, warnings: [], inferred: same.some((x) => x.d!.inferred) };
+  const merged: NormalisedDataset = { datasetType: lead.d!.datasetType, bank: [], invoices: [], rowsRead: 0, rowsSkipped: 0, warnings: [], inferred: same.some((x) => x.d!.inferred), salesRegister: same.some((x) => x.d!.salesRegister) };
   for (const x of same) {
     merged.bank.push(...x.d!.bank); merged.invoices.push(...x.d!.invoices);
     merged.rowsRead += x.d!.rowsRead; merged.rowsSkipped += x.d!.rowsSkipped;

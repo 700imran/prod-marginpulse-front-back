@@ -1,0 +1,61 @@
+{
+ "sheets": [
+  {
+   "name": "GSTR",
+   "rows": [
+    [
+     "GSTIN of supplier",
+     "Trade/Legal name",
+     "Invoice number",
+     "Invoice type",
+     "Invoice Date",
+     "Invoice Value(₹)",
+     "Taxable Value (₹)",
+     "Integrated Tax(₹)",
+     "Central Tax(₹)",
+     "State/UT Tax(₹)",
+     "Cess(₹)"
+    ],
+    [
+     "27AAACA1234F1Z5",
+     "ACME TRADERS PVT LTD",
+     "INV-1001",
+     "R",
+     "03-04-2026",
+     11800,
+     10000,
+     0,
+     900,
+     900,
+     0
+    ],
+    [
+     "27AAACA1234F1Z5",
+     "ACME TRADERS PVT LTD",
+     "INV-1002",
+     "R",
+     "09-04-2026",
+     5900,
+     5000,
+     900,
+     0,
+     0,
+     0
+    ],
+    [
+     "27AAACA1234F1Z5",
+     "ACME TRADERS PVT LTD",
+     "CN-9",
+     "Credit note",
+     "15-05-2026",
+     2360,
+     2000,
+     0,
+     180,
+     180,
+     0
+    ]
+   ]
+  }
+ ]
+}
