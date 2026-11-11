@@ -91,16 +91,20 @@ test('switching region and currency changes wording and formatting immediately, 
 });
 
 test('upload routes each file to the right backend feature and reports honest results', async () => {
-  const { el, fns } = mount();
+  // The parser (inside api.uploadDataset) decides: a genuine binary .xls comes back as an actionable {error}.
+  const OLD_XLS = "This is an old binary Excel (.xls) file. Open it in Excel and use Save As → .xlsx (or CSV), then upload that.";
+  const uploadDataset = jest.fn((file) => Promise.resolve(file.name === 'old.xls' ? { error: OLD_XLS }
+    : { rowsImported: 120, datasetType: 'BANK_STATEMENT', reconciliation: { reconciled: 17, review: 3 } }));
+  const { el, fns } = mount({ api: { uploadDataset } });
   await flush();
   const input = el.querySelector('[data-testid="file-input"]');
   const files = [new File(['a'], 'bank.xlsx'), new File(['b'], 'inv.pdf', { type: 'application/pdf' }), new File(['c'], 'old.xls'), new File(['d'], 'x.exe')];
   await act(async () => { Object.defineProperty(input, 'files', { value: files, configurable: true }); input.dispatchEvent(new Event('change', { bubbles: true })); await new Promise((r) => setTimeout(r, 40)); });
-  expect(fns.uploadDataset).toHaveBeenCalledTimes(1);   // xlsx → dataset pipeline
+  expect(fns.uploadDataset).toHaveBeenCalledTimes(2);   // xlsx + xls → dataset pipeline (xls may still be refused by the parser)
   expect(fns.uploadDocument).toHaveBeenCalledTimes(1);  // pdf → document OCR pipeline
   const t = el.textContent;
   expect(t).toContain('Imported 120 bank transactions — 17 reconciled, 3 need review.');
-  expect(t).toMatch(/old\.xls — Old \.xls isn't supported/); expect(t).toMatch(/x\.exe — Unsupported type/);
+  expect(t).toMatch(/old\.xls — This is an old binary Excel \(\.xls\) file\. Open it in Excel and use Save As/); expect(t).toMatch(/x\.exe — Unsupported type/);
 });
 
 test('a failed load shows a clear error with retry instead of a blank or crashing page', async () => {

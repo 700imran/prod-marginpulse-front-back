@@ -216,17 +216,19 @@ export async function uploadDocument(file, docType = 'INVOICE') {
 // ── Any tabular dataset (CSV/TSV/XLSX/JSON/XML/TXT) ──────────────────────────
 // Parsed in the browser (lazy), classified + normalised + reconciled server-side.
 export async function uploadDataset(file, bankName = '') {
-  const { parseFileToGrid } = await import('./ingest/parseFile');
-  let rows;
+  const { parseFileToSheets } = await import('./ingest/parseFile');
+  let sheets;
   try {
-    rows = await parseFileToGrid(file);
+    sheets = await parseFileToSheets(file);
   } catch (e) {
     return { error: e.message || 'Could not read this file' };
   }
+  // One sheet → the plain `rows` form (older API clients); several → every sheet so the server can merge/skip them.
+  const payload = sheets.length === 1 ? { rows: sheets[0].rows } : { sheets };
   const res = await fetch(`${BASE}/api/v1/reconciliation/dataset-upload`, {
     method: 'POST',
     headers: await authHeaders(),
-    body: JSON.stringify({ fileName: file.name, bankName, rows }),
+    body: JSON.stringify({ fileName: file.name, bankName, ...payload }),
   });
   clearDataCache();
   return res.json();

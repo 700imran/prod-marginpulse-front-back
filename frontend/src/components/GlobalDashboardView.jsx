@@ -116,8 +116,7 @@ export default function GlobalDashboardView({ tenant, onToast }) {
     for (const file of files) {
       const kind = fileKind(file);
       try {
-        if (kind === "legacy-xls") results.push({ name: file.name, ok: false, msg: "Old .xls isn't supported — Save As .xlsx or .csv in Excel and upload again." });
-        else if (kind === "unsupported") results.push({ name: file.name, ok: false, msg: "Unsupported type. Use PDF, image, XLSX, CSV, TSV, JSON, XML or TXT." });
+        if (kind === "unsupported") results.push({ name: file.name, ok: false, msg: "Unsupported type. Use PDF, image, XLSX, CSV, TSV, JSON, XML, HTML or TXT." });
         else if (kind === "data") {
           const r = await uploadDataset(file);
           if (r?.rowsImported != null) {

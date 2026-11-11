@@ -252,8 +252,7 @@ export default function DashboardView({ onToast, tenant, onNavigate }) {
     if (!file) return;
     const kind = fileKind(file);
     e.target.value = "";
-    if (kind === "legacy-xls") { onToast?.("Old .xls files aren't supported — open it in Excel and Save As .xlsx or .csv", "error"); return; }
-    if (kind === "unsupported") { onToast?.("Unsupported file type. Use PDF, image, XLSX, CSV, TSV, JSON, XML or TXT", "error"); return; }
+    if (kind === "unsupported") { onToast?.("Unsupported file type. Use PDF, image, XLSX, CSV, TSV, JSON, XML, HTML or TXT", "error"); return; }
     setUploading(true);
     try {
       if (kind === "data") {
