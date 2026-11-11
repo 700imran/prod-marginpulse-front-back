@@ -1,5 +1,6 @@
 import { primaryOrigin } from "./middleware/security";
 import type { Env } from "./config";
+import { fetchExternal, EXTERNAL_TIMEOUTS } from "./lib/external";
 
 // DELIBERATE PROVIDER CHANGE, not a straight port: internal/email/email.go
 // spoke raw SMTP (net/smtp, including a hand-rolled STARTTLS/implicit-TLS
@@ -20,7 +21,7 @@ export async function sendEmail(env: Env, to: string, subject: string, htmlBody:
     console.log("email not configured — logging instead of sending", { to, subject });
     return;
   }
-  const resp = await fetch("https://api.resend.com/emails", {
+  const resp = await fetchExternal("email", "https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ from: env.INGEST_EMAIL_ADDRESS, to, subject, html: htmlBody }),

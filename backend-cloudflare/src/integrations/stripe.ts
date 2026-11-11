@@ -1,4 +1,5 @@
 import type { DataConnector, FetchedTransaction } from "./connector";
+import { fetchExternal, EXTERNAL_TIMEOUTS } from "../lib/external";
 
 // Exact port of internal/integrations/stripe.go against Stripe's real
 // Payouts API (https://stripe.com/docs/api/payouts) — API-key
@@ -14,7 +15,7 @@ export class StripeConnector implements DataConnector {
     const secretKey = credentials.secret_key;
     if (!secretKey) throw new Error("secret_key is required");
 
-    const resp = await fetch("https://api.stripe.com/v1/account", { headers: { Authorization: `Bearer ${secretKey}` } });
+    const resp = await fetchExternal("stripe", "https://api.stripe.com/v1/account", { headers: { Authorization: `Bearer ${secretKey}` } });
     if (resp.status === 401) throw new Error("Stripe rejected this secret key");
     if (!resp.ok) throw new Error(`Stripe API returned HTTP ${resp.status}`);
 
@@ -31,7 +32,7 @@ export class StripeConnector implements DataConnector {
       if (!Number.isNaN(unix)) url += `&arrival_date[gte]=${unix}`;
     }
 
-    const resp = await fetch(url, { headers: { Authorization: `Bearer ${secretKey}` } });
+    const resp = await fetchExternal("stripe", url, { headers: { Authorization: `Bearer ${secretKey}` } });
     if (!resp.ok) throw new Error(`Stripe payouts fetch failed: HTTP ${resp.status}`);
     const body = (await resp.json()) as { data: { id: string; amount: number; currency: string; status: string; arrival_date: number }[] };
 

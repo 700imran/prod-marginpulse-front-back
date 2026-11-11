@@ -34,57 +34,130 @@ export interface OcrLine {
   confidence: number; // 0-1 scale — matches ocr_confidence_threshold in settings (db/schema.sql)
 }
 
-const AMOUNT_PATTERNS = [
-  /(?:total|grand\s*total|amount\s*due|net\s*payable)[^\d]*?([\d,]+\.?\d*)/i,
-  /(?:₹|rs\.?|inr)\s*([\d,]+\.?\d*)/i,
-  /([\d,]{4,}\.?\d{0,2})/,
-];
-const GSTIN_PATTERN = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/;
-const DATE_PATTERN_DMY = /(\d{2})[/-](\d{2})[/-](\d{4})/;
-const DATE_PATTERN_YMD = /(\d{4})[/-](\d{2})[/-](\d{2})/;
-const TAX_PATTERN = /(?:cgst|sgst|igst|gst|tax)[^\d]*([\d,]+\.?\d*)/i;
-const INVOICE_PATTERN = /(?:invoice|inv)[^\w]*([\w/-]+)/i;
-const INVOICE_HEADER_RE = /invoice|receipt|bill|tax\s*invoice/i;
-const STARTS_WITH_DIGIT = /^\d/;
+// ── field extraction ─────────────────────────────────────────────────────
+// Works line by line with LABEL PRIORITY (a grand total beats a total, a total beats a balance due, an invoice date
+// beats a due date), instead of the first regex hit anywhere in the text — which read "Sub Total" as the total,
+// "GSTIN: 27AAA…" as the tax amount and the word "Invoice" as the invoice number.
+import { parseDate } from "./dataset";
 
-function extractAmount(text: string): number | null {
-  for (const pat of AMOUNT_PATTERNS) {
-    const m = text.match(pat);
-    if (m) {
-      const v = parseFloat(m[1]!.replace(/,/g, ""));
-      if (!Number.isNaN(v)) return v;
+const GSTIN_PATTERN = /\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1})\b/;
+const MONEY_RE = /(?:₹|rs\.?|inr)?\s*(\d{1,3}(?:,\d{2,3})+(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)(\s*%)?/gi;
+
+// All money-looking numbers on a line, minus percentages ("@9%", "18 %") and the digits inside long ids.
+function amountsIn(line: string): number[] {
+  const out: number[] = [];
+  for (const m of line.matchAll(MONEY_RE)) {
+    if (m[2]) continue;
+    const start = m.index! + m[0].indexOf(m[1]!); // where the DIGITS begin (the match may start with spaces / a ₹ prefix)
+    const before = line.slice(Math.max(0, start - 1), start);
+    if (before === "@" || (/[A-Za-z]/.test(before) && !/[₹]/.test(m[0]))) continue; // "@9%", or digits glued to letters like INV2026
+    const v = parseFloat(m[1]!.replace(/,/g, ""));
+    if (Number.isFinite(v)) out.push(v);
+  }
+  return out;
+}
+const lastAmount = (line: string) => { const a = amountsIn(line); return a.length ? a[a.length - 1]! : null; };
+
+const NOT_A_TOTAL = /sub\s*-?\s*total|total\s*(tax|gst|cgst|sgst|igst|discount|qty|quantity|items?|weight|units|pcs|taxable|cess)|in\s*words|amount\s*chargeable|\bdue\s*date\b/i;
+const TOTAL_TIERS: RegExp[] = [
+  /grand\s*total/i,
+  /(invoice|bill)\s*(total|value|amount)|total\s*(invoice\s*)?(amount|value)|net\s*(amount\s*)?payable|amount\s*payable|total\s*payable|payable\s*amount/i,
+  /^\W*total\b/i,
+  /^\W*(net\s*)?(amount|balance)\s*due|^\W*due\s*amount/i,
+];
+
+function extractAmount(rows: string[]): number | null {
+  for (const tier of TOTAL_TIERS) {
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const line = rows[i]!;
+      if (!tier.test(line) || NOT_A_TOTAL.test(line)) continue;
+      const v = lastAmount(line) ?? (rows[i + 1] ? lastAmount(rows[i + 1]!) : null);
+      if (v !== null && v > 0) return v;
     }
   }
-  return null;
+  // Nothing labelled: the biggest ₹/Rs amount, else the biggest decimal amount on the page.
+  let best: number | null = null;
+  for (const line of rows) {
+    if (!/₹|rs\.?|inr/i.test(line) || NOT_A_TOTAL.test(line)) continue;
+    for (const v of amountsIn(line)) if (best === null || v > best) best = v;
+  }
+  if (best !== null) return best;
+  for (const line of rows) for (const m of line.matchAll(/\b\d{1,3}(?:,\d{2,3})*\.\d{2}\b/g)) { const v = parseFloat(m[0].replace(/,/g, "")); if (best === null || v > best) best = v; }
+  return best;
+}
+
+function extractTax(rows: string[]): number {
+  // Components (CGST/SGST/IGST/cess): the biggest figure per type, so a repeated HSN summary table isn't added twice.
+  const comp: Record<string, number> = {};
+  let labelled = 0;
+  for (const line of rows) {
+    if (/gstin|gst\s*(no|number|reg)/i.test(line)) continue;
+    const m = line.match(/\b(cgst|sgst|utgst|igst|cess)\b/i);
+    const v = lastAmount(line);
+    if (m && v !== null) { const k = m[1]!.toLowerCase().replace("utgst", "sgst"); comp[k] = Math.max(comp[k] ?? 0, v); continue; }
+    if (/^\W*(total\s*(tax|gst)|tax\s*amount|gst\s*amount|total\s*gst|gst|tax)\b/i.test(line) && v !== null) labelled = Math.max(labelled, v);
+  }
+  const sum = Object.values(comp).reduce((a, b) => a + b, 0);
+  return Math.round(Math.max(sum, labelled) * 100) / 100;
 }
 
 function extractGSTIN(text: string): string {
   return text.match(GSTIN_PATTERN)?.[1] ?? "";
 }
 
-function isValidDate(y: string, m: string, d: string): boolean {
-  const yi = parseInt(y, 10), mi = parseInt(m, 10), di = parseInt(d, 10);
-  return yi >= 1900 && yi <= 2100 && mi >= 1 && mi <= 12 && di >= 1 && di <= 31;
+const DATE_FINDERS: RegExp[] = [
+  /\b(\d{4}[-/.]\d{1,2}[-/.]\d{1,2})\b/,
+  /\b(\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4})\b/,
+  /\b(\d{1,2}(?:st|nd|rd|th)?[\s-]*(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?[\s,-]*\d{2,4})\b/i,
+  /\b((?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+\d{2,4})\b/i,
+];
+const INVOICE_DATE_LABEL = /(invoice|bill|tax\s*invoice|document|issue|receipt)\s*(date|dt)|date\s*of\s*(issue|invoice)|\bdated\b/i;
+const BARE_DATE_LABEL = /^\W*(date|dt)\b/i;
+const NOT_THE_INVOICE_DATE = /\b(due|payable\s*by|delivery|order|po|ship|dispatch|ack|irn|valid|expiry|expires|period|supply|reading|from|to)\b/i;
+
+function datesIn(line: string): string[] {
+  const out: string[] = [];
+  for (const re of DATE_FINDERS) for (const m of line.matchAll(new RegExp(re.source, re.flags + "g"))) { const d = parseDate(m[1]); if (d && !out.includes(d)) out.push(d); }
+  return out;
 }
 
-function extractDate(text: string): string {
-  const ymd = text.match(DATE_PATTERN_YMD);
-  if (ymd && isValidDate(ymd[1]!, ymd[2]!, ymd[3]!)) return `${ymd[1]}-${ymd[2]}-${ymd[3]}`;
-  const dmy = text.match(DATE_PATTERN_DMY);
-  if (dmy && isValidDate(dmy[3]!, dmy[2]!, dmy[1]!)) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
-  return "";
-}
-
-function extractVendor(text: string): string {
-  const lines = text.split("\n").map((l) => l.trim()).filter((l) => l !== "");
-  const limit = Math.min(5, lines.length);
-  for (const line of lines.slice(0, limit)) {
-    if (line.length > 5 && !STARTS_WITH_DIGIT.test(line) && !INVOICE_HEADER_RE.test(line)) {
-      return line.length > 255 ? line.slice(0, 255) : line;
+function extractDate(rows: string[]): string {
+  const tiers: ((line: string) => boolean)[] = [
+    (l) => INVOICE_DATE_LABEL.test(l) && !/\b(due|delivery|ack|irn)\b/i.test(l),
+    (l) => BARE_DATE_LABEL.test(l) && !NOT_THE_INVOICE_DATE.test(l),
+    (l) => !NOT_THE_INVOICE_DATE.test(l),
+    () => true,
+  ];
+  for (const tier of tiers) {
+    for (let i = 0; i < rows.length; i++) {
+      if (!tier(rows[i]!)) continue;
+      const d = datesIn(rows[i]!)[0] ?? (tier === tiers[0] && rows[i + 1] ? datesIn(rows[i + 1]!)[0] : undefined);
+      if (d) return d;
     }
   }
-  if (lines.length > 0) return lines[0]!.length > 255 ? lines[0]!.slice(0, 255) : lines[0]!;
   return "";
+}
+
+const INVOICE_NO_LABEL = /(?:invoice|inv|bill|receipt|voucher|document|tax\s*invoice)\s*(?:no\b|number\b|num\b|#)\.?\s*[:\-#.]*\s*([A-Z0-9][A-Z0-9/\-_.]{1,40})/i;
+function extractInvoiceNumber(rows: string[]): string {
+  for (let i = 0; i < rows.length; i++) {
+    const m = rows[i]!.match(INVOICE_NO_LABEL);
+    if (m && /\d/.test(m[1]!) && !/^\d{1,2}[-/.]\d{1,2}[-/.]\d{2,4}$/.test(m[1]!)) return m[1]!.replace(/[.,;]+$/, "").slice(0, 128);
+    // label alone on its line, value on the next
+    if (/(?:invoice|bill|voucher)\s*(?:no|number|#)\.?\s*:?\s*$/i.test(rows[i]!) && rows[i + 1]) { const v = rows[i + 1]!.trim().match(/^([A-Z0-9][A-Z0-9/\-_.]{1,40})/i); if (v && /\d/.test(v[1]!)) return v[1]!; }
+  }
+  return "";
+}
+
+const HEADER_LINE = /^\W*(?:original|duplicate|triplicate)?(?:\s*for\s*\w+(?:\s+\w+)?)?\W*$|^\W*(?:tax\s*invoice|invoice|receipt|bill\s*of\s*supply|cash\s*memo|cash\s*bill|proforma(?:\s*invoice)?|e-?\s*invoice|credit\s*note|debit\s*note|estimate|quotation)\W*(?:\(.*\))?\W*$/i;
+const CONTACT_LINE = /\b(phone|ph|tel|mob|mobile|email|e-mail|fax|www|gstin|gst\s*no|pan|cin|irn|ack)\b|@|\d{8,}/i;
+function extractVendor(rows: string[]): string {
+  const cap = (s: string) => (s.length > 255 ? s.slice(0, 255) : s);
+  for (const line of rows.slice(0, 10)) {
+    if (line.length < 3 || /^\d/.test(line) || HEADER_LINE.test(line) || CONTACT_LINE.test(line)) continue;
+    return cap(line);
+  }
+  return rows[0] ? cap(rows[0]) : "";
 }
 
 function roundTo4(f: number): number {
@@ -109,21 +182,13 @@ export function processDocument(lines: OcrLine[]): OCRResult {
   }
   const avgConfidence = confidenceSum / lines.length;
 
-  const totalAmount = extractAmount(rawText) ?? 0;
+  const rows = lines.map((l) => l.text.trim()).filter((t) => t !== "");
+  const totalAmount = extractAmount(rows) ?? 0;
   const gstin = extractGSTIN(rawText);
-  const vendor = extractVendor(rawText);
-  const docDate = extractDate(rawText);
-
-  let taxAmount = 0;
-  const taxMatch = rawText.match(TAX_PATTERN);
-  if (taxMatch) {
-    const v = parseFloat(taxMatch[1]!.replace(/,/g, ""));
-    if (!Number.isNaN(v)) taxAmount = v;
-  }
-
-  let invoiceNumber = "";
-  const invMatch = rawText.match(INVOICE_PATTERN);
-  if (invMatch) invoiceNumber = invMatch[1]!.slice(0, 128);
+  const vendor = extractVendor(rows);
+  const docDate = extractDate(rows);
+  const taxAmount = extractTax(rows);
+  const invoiceNumber = extractInvoiceNumber(rows);
 
   return {
     ocrAvailable: true,

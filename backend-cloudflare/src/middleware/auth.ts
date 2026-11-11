@@ -4,6 +4,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import { verifySupabaseToken, loadTenant, createTenant, type TenantContext } from "../auth/supabase";
 import { getPlatformSettings } from "../repository/platformSettings";
+import { userRateLimit } from "./rateLimit";
 
 // Replaces middleware.go's RequireAuth. Supabase issues and rotates the
 // token itself, so there's no blocklist check here — signing out is
@@ -32,6 +33,12 @@ export const requireAuth: MiddlewareHandler<{ Bindings: Env; Variables: { sql: S
   }
   if (!tenant.isActive) {
     return c.json({ error: "account is deactivated" }, 403);
+  }
+  const budget = userRateLimit(tenant.tenantId);
+  if (!budget.allowed) {
+    emit("rate_limited", { limiter: "user" });
+    c.header("Retry-After", String(budget.retryAfter));
+    return c.json({ error: "rate limit exceeded, try again shortly" }, 429);
   }
   c.set("tenant", tenant);
   await next();

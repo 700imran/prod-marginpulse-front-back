@@ -4,11 +4,12 @@
 // warm-isolate optimization, not a guarantee — the 401-triggers-refetch
 // logic below is what actually keeps this correct either way.
 import type { Env } from "../config";
+import { fetchExternal, EXTERNAL_TIMEOUTS } from "../lib/external";
 
 let cachedToken: string | null = null;
 
 async function getAuthToken(env: Env): Promise<string> {
-  const resp = await fetch(`${env.GST_API_BASE_URL}/authenticate`, {
+  const resp = await fetchExternal("gst", `${env.GST_API_BASE_URL}/authenticate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -27,7 +28,7 @@ export async function fetchGSTR2B(env: Env, gstin: string, returnPeriod: string)
   let token = cachedToken ?? (await getAuthToken(env));
 
   const doFetch = (tok: string) =>
-    fetch(`${env.GST_API_BASE_URL}/returns/gstr2b?gstin=${gstin}&ret_period=${returnPeriod}&day_limit=30`, {
+    fetchExternal("gst", `${env.GST_API_BASE_URL}/returns/gstr2b?gstin=${gstin}&ret_period=${returnPeriod}&day_limit=30`, {
       headers: { "auth-token": tok },
     });
 

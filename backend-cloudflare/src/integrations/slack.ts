@@ -2,6 +2,7 @@ import type { Env } from "../config";
 import type { Sql } from "../db";
 import { getSlackAppConfig } from "../repository/platformSettings";
 import { decryptField } from "../security/fieldEncryption";
+import { fetchExternal, EXTERNAL_TIMEOUTS } from "../lib/external";
 
 // Exact port of internal/integrations/slack.go — Slack's real OAuth v2 +
 // "Incoming Webhooks" feature, used to push reconciliation alerts into a
@@ -39,7 +40,7 @@ export async function slackExchangeCode(env: Env, sql: Sql, code: string): Promi
     code,
     redirect_uri: settings.slackRedirectUri,
   });
-  const resp = await fetch("https://slack.com/api/oauth.v2.access", {
+  const resp = await fetchExternal("slack", "https://slack.com/api/oauth.v2.access", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: form.toString(),
@@ -60,7 +61,7 @@ export async function slackExchangeCode(env: Env, sql: Sql, code: string): Promi
 }
 
 export async function slackSendNotification(webhookUrl: string, message: string): Promise<void> {
-  const resp = await fetch(webhookUrl, {
+  const resp = await fetchExternal("slack", webhookUrl, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text: message }),

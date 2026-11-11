@@ -9,6 +9,7 @@ import { verifyMetaSignature256 } from "../security/hmac";
 import { constantTimeEqual, isTrustedMediaUrl } from "../security/webhookAuth";
 import { validateUpload, safeFilename } from "../security/upload";
 import { isProd } from "../config";
+import { fetchExternal, EXTERNAL_TIMEOUTS } from "../lib/external";
 
 // Unauthenticated by nature — these are called by Meta/an email relay,
 // not by a logged-in tenant. Mounted separately in src/index.ts (not
@@ -44,12 +45,12 @@ interface WAWebhookPayload {
 
 async function downloadWhatsAppMedia(env: Env, mediaId: string): Promise<{ data: ArrayBuffer; mimeType: string } | null> {
   if (!env.WHATSAPP_ACCESS_TOKEN) return null;
-  const lookupResp = await fetch(`https://graph.facebook.com/${env.WHATSAPP_API_VERSION}/${mediaId}`, {
+  const lookupResp = await fetchExternal("media", `https://graph.facebook.com/${env.WHATSAPP_API_VERSION}/${mediaId}`, {
     headers: { Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}` },
   });
   const meta = (await lookupResp.json()) as { url?: string; mime_type?: string };
   if (!meta.url || !isTrustedMediaUrl(meta.url)) return null;
-  const mediaResp = await fetch(meta.url, { headers: { Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}` }, redirect: "error" });
+  const mediaResp = await fetchExternal("media", meta.url, { headers: { Authorization: `Bearer ${env.WHATSAPP_ACCESS_TOKEN}` }, redirect: "error" });
   if (!mediaResp.ok) return null;
   const declared = parseInt(mediaResp.headers.get("content-length") ?? "0", 10);
   if (declared > 15 * 1024 * 1024) return null;

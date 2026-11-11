@@ -4,6 +4,7 @@
 // without paid verification API access.
 import type { Env } from "../config";
 import { levenshteinRatio } from "./reconciliation";
+import { fetchExternal, EXTERNAL_TIMEOUTS, isRetryableStatus } from "../lib/external";
 
 // Strips punctuation and common Indian legal-entity suffixes so
 // "Priya Traders" and "Priya Traders Pvt Ltd" normalize to the same
@@ -20,6 +21,9 @@ function normalizeName(s: string): string {
 
 export interface IdentityResult {
   status: "VERIFIED" | "FAILED" | "PENDING";
+  /** true = the provider was slow / throttling / down. The record stays PENDING and the queue retries with backoff;
+   *  only a real rejection from the provider is ever written as FAILED. */
+  transient?: boolean;
   error?: string;
   legalName?: string;
   verifiedName?: string;
@@ -31,12 +35,13 @@ export async function verifyGSTIN(env: Env, gstin: string): Promise<IdentityResu
   }
   let resp: Response;
   try {
-    resp = await fetch(`${env.GST_API_BASE_URL}/gstin/${gstin}`, {
+    resp = await fetchExternal("gst", `${env.GST_API_BASE_URL}/gstin/${gstin}`, {
       headers: { "client-id": env.GST_API_CLIENT_ID, "client-secret": env.GST_API_CLIENT_SECRET },
-    });
+    }, EXTERNAL_TIMEOUTS.gst);
   } catch (e) {
-    return { status: "FAILED", error: `GST portal request failed: ${(e as Error).message}` };
+    return { status: "PENDING", transient: true, error: (e as Error).message };
   }
+  if (isRetryableStatus(resp.status)) return { status: "PENDING", transient: true, error: `GST portal is busy (HTTP ${resp.status}) — will retry` };
   if (!resp.ok) return { status: "FAILED", error: `GST portal returned HTTP ${resp.status}` };
 
   let body: { lgnm?: string; tradeNam?: string; sts?: string };
@@ -57,12 +62,13 @@ export async function verifyPAN(env: Env, pan: string, label?: string): Promise<
   }
   let resp: Response;
   try {
-    resp = await fetch(`${env.GST_API_BASE_URL}/pan/${pan}`, {
+    resp = await fetchExternal("gst", `${env.GST_API_BASE_URL}/pan/${pan}`, {
       headers: { "client-id": env.GST_API_CLIENT_ID, "client-secret": env.GST_API_CLIENT_SECRET },
-    });
+    }, EXTERNAL_TIMEOUTS.gst);
   } catch (e) {
-    return { status: "FAILED", error: `PAN verification request failed: ${(e as Error).message}` };
+    return { status: "PENDING", transient: true, error: (e as Error).message };
   }
+  if (isRetryableStatus(resp.status)) return { status: "PENDING", transient: true, error: `PAN verification API is busy (HTTP ${resp.status}) — will retry` };
   if (!resp.ok) return { status: "FAILED", error: `PAN verification API returned HTTP ${resp.status}` };
 
   let body: { full_name?: string; valid?: boolean };
@@ -85,14 +91,15 @@ export async function verifyBankAccount(env: Env, accountNumber: string, ifscCod
   }
   let resp: Response;
   try {
-    resp = await fetch(`${env.GST_API_BASE_URL}/bank-account/verify`, {
+    resp = await fetchExternal("bank", `${env.GST_API_BASE_URL}/bank-account/verify`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "client-id": env.GST_API_CLIENT_ID, "client-secret": env.GST_API_CLIENT_SECRET },
       body: JSON.stringify({ account_number: accountNumber, ifsc: ifscCode }),
-    });
+    }, EXTERNAL_TIMEOUTS.bank);
   } catch (e) {
-    return { status: "FAILED", error: `bank verification request failed: ${(e as Error).message}` };
+    return { status: "PENDING", transient: true, error: (e as Error).message };
   }
+  if (isRetryableStatus(resp.status)) return { status: "PENDING", transient: true, error: `bank verification API is busy (HTTP ${resp.status}) — will retry` };
   if (!resp.ok) return { status: "FAILED", error: `bank verification API returned HTTP ${resp.status}` };
 
   let body: { account_exists?: boolean; name_at_bank?: string };

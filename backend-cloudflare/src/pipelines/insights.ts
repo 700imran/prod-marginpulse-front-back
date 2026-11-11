@@ -2,6 +2,7 @@
 // rule-based fallback, same prompt, same budget-check-before-call flow.
 import type { Env } from "../config";
 import { checkAndIncrementAIBudget } from "../ratelimit";
+import { fetchExternal, EXTERNAL_TIMEOUTS } from "../lib/external";
 
 const SYSTEM_PROMPT = `You are a plain-English financial summariser for small business owners.
 Your job is to convert raw reconciliation data into a single, clear, jargon-free paragraph
@@ -64,7 +65,7 @@ Write the plain-English summary.`;
 }
 
 async function callAnthropic(env: Env, userMessage: string, maxTokens: number): Promise<string> {
-  const resp = await fetch(`${env.ANTHROPIC_API_BASE_URL}/v1/messages`, {
+  const resp = await fetchExternal("llm", `${env.ANTHROPIC_API_BASE_URL}/v1/messages`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

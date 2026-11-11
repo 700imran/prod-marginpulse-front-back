@@ -52,3 +52,13 @@ test("separate isolate limiters do not share one counter (a busy user must not b
   for (let i = 0; i < 100; i++) await a.request("/api/other", { headers: h });   // heavy unrelated traffic
   assert.equal((await a.request("/api/billing/x", { headers: h })).status, 200);
 });
+
+import { userRateLimit } from "../src/middleware/rateLimit.ts";
+test("per-account budget: one tenant cannot exceed its allowance, another tenant is unaffected", () => {
+  const a = crypto.randomUUID(), b = crypto.randomUUID();
+  for (let i = 0; i < 5; i++) assert.equal(userRateLimit(a, 5, 60).allowed, true);
+  const over = userRateLimit(a, 5, 60);
+  assert.equal(over.allowed, false);
+  assert.ok(over.retryAfter >= 1 && over.retryAfter <= 60);
+  assert.equal(userRateLimit(b, 5, 60).allowed, true);
+});

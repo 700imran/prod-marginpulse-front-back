@@ -36,7 +36,7 @@ export const app = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: Tena
 app.use("*", requestId, telemetry, securityHeaders, corsMiddleware(), requestSizeLimit);
 // Abuse controls (before any DB work): generous per-IP ceiling everywhere,
 // tighter on public/unauthenticated and money endpoints.
-app.use("/api/*", isolateRateLimit(600, 60));
+app.use("/api/*", isolateRateLimit(6000, 60));
 app.use("/api/v1/roi/*", rateLimit("roi", 20, 60));
 // Payments must not depend on Redis being up: the zero-latency per-isolate limiter is the always-on backstop and the
 // Upstash limiter (1.5 s timeout) adds global limits; if Redis is down we fail OPEN and count it (ratelimit_backend_error).

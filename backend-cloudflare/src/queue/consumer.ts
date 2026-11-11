@@ -195,6 +195,7 @@ async function verifyTaxIdentifierTask(env: Env, args: Record<string, any>): Pro
     else if (taxId.idType === "PAN") result = await verifyPAN(env, taxId.idValue, taxId.label ?? undefined);
     else result = { status: "PENDING" as const, error: "No automated verifier for this type yet — verify manually" };
 
+    if ("transient" in result && result.transient) throw new TransientTaskError(result.error ?? "verification provider unavailable");
     await updateTaxIdentifierVerification(sql, tenantId, taxIdentifierId, result.status, result.legalName ?? null, result.error ?? null, null);
     console.log("tax_identifier_verification_completed", { taxIdentifierId, status: result.status });
   } finally {
@@ -215,6 +216,7 @@ async function verifyBankAccountTask(env: Env, args: Record<string, any>): Promi
     const result = await verifyBankAccount(env, plaintext, account.ifscCode, account.accountHolderName);
     // plaintext goes out of scope here and is never stored/logged.
 
+    if (result.transient) throw new TransientTaskError(result.error ?? "verification provider unavailable");
     await updateBankAccountVerification(sql, tenantId, bankAccountId, result.status, result.verifiedName ?? null, result.error ?? null);
     console.log("bank_account_verification_completed", { bankAccountId, status: result.status });
   } finally {

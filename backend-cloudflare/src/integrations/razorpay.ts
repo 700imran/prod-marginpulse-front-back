@@ -1,4 +1,5 @@
 import type { DataConnector, FetchedTransaction } from "./connector";
+import { fetchExternal, EXTERNAL_TIMEOUTS } from "../lib/external";
 
 // Exact port of internal/integrations/razorpay.go against Razorpay's
 // real Settlements API (https://razorpay.com/docs/api/settlements/) —
@@ -12,7 +13,7 @@ export class RazorpayConnector implements DataConnector {
     const { key_id: keyId, key_secret: keySecret } = credentials;
     if (!keyId || !keySecret) throw new Error("key_id and key_secret are required");
 
-    const resp = await fetch("https://api.razorpay.com/v1/settlements?count=1", {
+    const resp = await fetchExternal("razorpay", "https://api.razorpay.com/v1/settlements?count=1", {
       headers: { Authorization: `Basic ${btoa(`${keyId}:${keySecret}`)}` },
     });
     if (resp.status === 401) throw new Error("Razorpay rejected these credentials — check the key_id/key_secret");
@@ -30,7 +31,7 @@ export class RazorpayConnector implements DataConnector {
       if (!Number.isNaN(unix)) url += `&from=${unix}`;
     }
 
-    const resp = await fetch(url, { headers: { Authorization: `Basic ${btoa(`${keyId}:${keySecret}`)}` } });
+    const resp = await fetchExternal("razorpay", url, { headers: { Authorization: `Basic ${btoa(`${keyId}:${keySecret}`)}` } });
     if (!resp.ok) throw new Error(`Razorpay settlements fetch failed: HTTP ${resp.status}`);
     const body = (await resp.json()) as { items: { id: string; amount: number; fees: number; created_at: number; status: string }[] };
 
