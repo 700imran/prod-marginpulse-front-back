@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { startPayment, retryVerification, loadRazorpayScript } from "../payments/razorpay";
 import { clearDataCache } from "../api";
+import UpiFallback from "../fallbacks/UpiFallback";
 
 export { startPayment };
 
@@ -114,6 +115,13 @@ export default function BillingView({ tenant }) {
           )}
         </div>
       )}
+
+      {/* Backup payment: renders nothing unless the server has the UPI fallback enabled; opens itself when the card flow failed. */}
+      <UpiFallback
+        plan={selectedPlan}
+        forceOpen={status.stage === "error"}
+        onPaid={() => onStatus({ stage: "success", message: "Payment successful — your plan is now active." })}
+      />
 
       <p style={{ fontSize: 12, color: "var(--text-gray)", marginTop: 14 }}>
         Payments are processed securely by Razorpay. Your plan is activated only after the payment is confirmed by our server.

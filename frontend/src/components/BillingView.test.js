@@ -10,6 +10,7 @@ test('Upgrade button shows live status, is disabled while working, and never use
     startPayment: (plan, { onStatus }) => new Promise((res) => { onStatus({ stage: 'preparing', message: 'Contacting the payment gateway…' }); release = () => { onStatus({ stage: 'error', message: 'Could not start the payment. You have not been charged.' }); res(); }; }),
   }));
   jest.doMock('../api', () => ({ clearDataCache: jest.fn() }));
+  jest.doMock('../fallbacks/fallbackApi', () => ({ getUpiConfig: () => Promise.resolve({ ok: true, data: { enabled: false } }) })); // UPI backup off: the screen is unchanged
   const View = require('./BillingView').default;
   const el = document.createElement('div'); document.body.appendChild(el);
   act(() => { createRoot(el).render(React.createElement(View, { tenant: { planTier: 'FREE' } })); });

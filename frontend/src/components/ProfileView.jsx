@@ -1,6 +1,7 @@
 import ViewSkeleton from "./ViewSkeleton";
 import { useState, useEffect } from "react";
 import { getProfile, updateProfile } from "../api";
+import PrivacyChoices from "../tracking/PrivacyChoices";
 
 export default function ProfileView({ profile: initialProfile, profileLoading, onToast, onProfileUpdated }) {
   const [profile, setProfile] = useState(initialProfile ?? null);
@@ -73,6 +74,7 @@ export default function ProfileView({ profile: initialProfile, profileLoading, o
   }
 
   return (
+    <>
     <div className="card">
       <h3 style={{ marginBottom: 24, fontSize: 18 }}>Workspace Details</h3>
       <div className="grid-2">
@@ -122,5 +124,7 @@ export default function ProfileView({ profile: initialProfile, profileLoading, o
         Manage your GSTIN, PAN, and bank account links under <strong>Tax IDs & Bank Accounts</strong>.
       </p>
     </div>
+    <PrivacyChoices />
+    </>
   );
 }

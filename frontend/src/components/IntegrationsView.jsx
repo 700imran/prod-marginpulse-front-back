@@ -14,6 +14,7 @@ import {
   listIntegrations, connectIntegration, syncIntegration, disconnectIntegration, getSlackConnectUrl,
 } from "../api";
 import { Toggle } from "../theme";
+import WhatsAppLinkCard from "../fallbacks/WhatsAppLinkCard";
 
 const CONNECTED_STATUS_COLOR = "var(--primary-color)";
 const ERROR_STATUS_COLOR = "var(--danger-color)";
@@ -278,6 +279,9 @@ export default function IntegrationsView({ onToast }) {
           disabled={saving}
         />
       </div>
+
+      {/* Free WhatsApp inbox (Baileys sidecar). Renders nothing unless the server has it enabled. */}
+      <WhatsAppLinkCard onToast={onToast} />
 
       <h3 style={{ marginBottom: 16, fontSize: 18 }}>Payment Gateways</h3>
       <RazorpayCard integration={integrations.RAZORPAY} onChanged={refreshIntegrations} onToast={onToast} />

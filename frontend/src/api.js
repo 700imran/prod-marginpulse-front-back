@@ -15,6 +15,7 @@
  */
 import { supabase } from './supabaseClient';
 import { tokenManager } from './security/tokenManager';
+import { fetchRetryingBusy } from './busyRetry';
 
 const BASE = process.env.REACT_APP_API_URL || '';
 
@@ -99,11 +100,13 @@ async function request(method, path, body) {
 }
 
 async function doRequest(method, path, body, retried = false) {
-  const res = await fetch(`${BASE}${path}`, {
+  const send = async () => fetch(`${BASE}${path}`, {
     method,
     headers: await authHeaders(),
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
+  // Reads can always be repeated; writes only when the server says {code:"BUSY"} (it refused before doing any work).
+  const res = await fetchRetryingBusy(send, { anyGet: method === 'GET', maxWaitMs: method === 'GET' ? 20000 : 30000 });
   if (res.status === 401 && !retried) {
     // Try Supabase's own refresh once (covers a token that expired in flight).
     const { data, error } = await supabase.auth.refreshSession();
@@ -204,11 +207,11 @@ export async function uploadDocument(file, docType = 'INVOICE') {
     console.warn('[uploadDocument] client-side OCR failed, uploading without extracted fields', e);
   }
 
-  const res = await fetch(`${BASE}/api/v1/documents/upload`, {
+  const res = await fetchRetryingBusy(async () => fetch(`${BASE}/api/v1/documents/upload`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${await tokenManager.getValidAccessToken()}` },
     body: form,
-  });
+  }));
   clearDataCache();
   return res.json();
 }
@@ -225,11 +228,11 @@ export async function uploadDataset(file, bankName = '') {
   }
   // One sheet → the plain `rows` form (older API clients); several → every sheet so the server can merge/skip them.
   const payload = sheets.length === 1 ? { rows: sheets[0].rows } : { sheets };
-  const res = await fetch(`${BASE}/api/v1/reconciliation/dataset-upload`, {
+  const res = await fetchRetryingBusy(async () => fetch(`${BASE}/api/v1/reconciliation/dataset-upload`, {
     method: 'POST',
     headers: await authHeaders(),
     body: JSON.stringify({ fileName: file.name, bankName, ...payload }),
-  });
+  }));
   clearDataCache();
   return res.json();
 }
