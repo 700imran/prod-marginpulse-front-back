@@ -66,3 +66,143 @@ tests:
         values: '0+10x5 _x25'
     alert_rule_test:
       - { eval_time: 28m, alertname: ApiNoTelemetry, exp_alerts: [{ exp_labels: { severity: warn }, exp_annotations: { summary: "No API metrics received for 15 min: Worker down, no traffic, or the collector/OTLP secret is broken" } }] }
+
+  - name: queue retries fire, a healthy queue does not
+    interval: 1m
+    input_series:
+      - series: 'marginpulse_events_total{event="queue_task",outcome="retry",task="run_ocr_pipeline"}'
+        values: '0 0 2 4 6 8 10 12 12 12 12 12'
+      - series: 'marginpulse_events_total{event="queue_task",outcome="ok",task="run_reconciliation"}'
+        values: '0+20x11'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: QueueTasksRetrying
+        exp_alerts:
+          - exp_labels: { severity: warn, task: run_ocr_pipeline }
+            exp_annotations: { summary: "Background task is failing and being retried (OCR / reconciliation / GST / identity checks). Look at Workers Logs for task_failed with this task name." }
+      - { eval_time: 3m, alertname: QueueTasksRetrying, exp_alerts: [] }
+
+  - name: a single give-up pages
+    interval: 1m
+    input_series:
+      - series: 'marginpulse_events_total{event="queue_task",outcome="gave_up",task="verify_tax_identifier"}'
+        values: '0 0 0 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: QueueTaskGaveUp
+        exp_alerts:
+          - exp_labels: { severity: page, task: verify_tax_identifier }
+            exp_annotations: { summary: "A background task used its whole retry budget and was dropped; the record stays PENDING. Provider outage? See task_gave_up in Workers Logs." }
+
+  - name: cron failure fires; a clean run does not; a missing run is noticed
+    interval: 1h
+    input_series:
+      - series: 'marginpulse_events_total{event="cron_run",outcome="error"}'
+        values: '0 0 1 1 1'
+      - series: 'marginpulse_events_total{event="cron_run",outcome="ok"}'
+        values: '0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: CronRunFailed
+        exp_alerts:
+          - exp_labels: { severity: warn }
+            exp_annotations: { summary: "The daily sweep (missing-invoice detection + visitor retention purge) hit an error. See cron_failed / scheduled_sweep_failed_for_tenant in Workers Logs." }
+      - { eval_time: 3h, alertname: CronNotRunning, exp_alerts: [] }
+
+  - name: no cron success for over a day fires CronNotRunning
+    interval: 1h
+    input_series:
+      - series: 'marginpulse_events_total{event="cron_run",outcome="ok"}'
+        values: '1 1 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _'
+    alert_rule_test:
+      - eval_time: 30h
+        alertname: CronNotRunning
+        exp_alerts:
+          - exp_labels: { severity: warn, event: cron_run, outcome: ok }   # absent_over_time() carries the selector's equality labels
+            exp_annotations: { summary: "No successful daily sweep in 27 hours: cron trigger missing/disabled, or telemetry export from the cron isolate is broken." }
+
+  - name: UPI gateway errors and mismatches
+    interval: 1m
+    input_series:
+      - series: 'marginpulse_events_total{event="payment",outcome="upi_gateway_error",mode="gateway"}'
+        values: '0 0 1 2 3 4 4 4 4 4'
+      - series: 'marginpulse_events_total{event="payment",outcome="upi_mismatch"}'
+        values: '0 0 0 0 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: UpiGatewayErrors
+        exp_alerts:
+          - exp_labels: { severity: warn }
+            exp_annotations: { summary: "The UPI backup gateway is failing to create orders (the Razorpay fallback is itself down)." }
+      - eval_time: 8m
+        alertname: UpiAmountMismatch
+        exp_alerts:
+          - exp_labels: { severity: warn }
+            exp_annotations: { summary: "A UPI gateway 'paid' event did not match the amount/order we expected and was NOT applied. Check the order manually." }
+
+  - name: WhatsApp sidecar alerts fire on their own metrics and stay silent when the sidecar is absent
+    interval: 1m
+    input_series:
+      - series: 'mp_wa_connection_up{job="whatsapp-gateway"}'
+        values: '1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      - series: 'mp_wa_spool_files{job="whatsapp-gateway"}'
+        values: '0 0 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3 3'
+      - series: 'mp_wa_forward_attempts_total{job="whatsapp-gateway",result="rejected_401"}'
+        values: '0 0 0 0 1 2 2 2 2 2 2 2 2 2 2 2'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: WhatsAppDisconnected
+        exp_alerts:
+          - exp_labels: { severity: warn }
+            exp_annotations: { summary: "The WhatsApp session has been disconnected for 10 minutes. If logged out: delete AUTH_DIR on the sidecar and scan the QR again." }
+      - eval_time: 20m
+        alertname: WhatsAppSpoolBacklog
+        exp_alerts:
+          - exp_labels: { severity: warn }
+            exp_annotations: { summary: "WhatsApp files are waiting on the sidecar's disk because the Worker is rejecting or unreachable for 15+ minutes." }
+      - eval_time: 6m
+        alertname: WhatsAppForwardRejected
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations: { summary: "The Worker is rejecting the sidecar's messages (4xx). Most likely WA_GATEWAY_WEBHOOK_SECRET differs between the sidecar and the Worker." }
+
+  - name: no sidecar deployed means no WhatsApp alerts
+    interval: 1m
+    input_series:
+      - series: 'marginpulse_events_total{event="payment",outcome="verified"}'
+        values: '0+1x20'
+    alert_rule_test:
+      - { eval_time: 19m, alertname: WhatsAppDisconnected, exp_alerts: [] }
+      - { eval_time: 19m, alertname: WhatsAppSpoolBacklog, exp_alerts: [] }
+
+  - name: database outage pages; a single blip does not
+    interval: 1m
+    input_series:
+      - series: 'marginpulse_events_total{event="db_unavailable",path="api"}'
+        values: '0 0 0 5 12 20 30 30 30 30 30 30'
+      - series: 'marginpulse_events_total{event="shed",route="upload"}'
+        values: '0+10x12'
+      - series: 'marginpulse_events_total{event="quota",outcome="blocked",resource="documents"}'
+        values: '0+1x70'
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DatabaseUnavailable
+        exp_alerts:
+          - exp_labels: { severity: page }
+            exp_annotations: { summary: "The API is answering 503 because the database is unreachable or out of connections (Supabase paused/overloaded, Hyperdrive pool exhausted). Clients are retrying with backoff. Check Supabase status/connection count and Hyperdrive." }
+      - eval_time: 11m
+        alertname: LoadSheddingActive
+        exp_alerts:
+          - exp_labels: { severity: warn, route: upload }
+            exp_annotations: { summary: "Heavy endpoints (uploads/imports/reconcile) are refusing requests with 503 because too many are running at once. Expected during a surge; if sustained, raise MAX_HEAVY_INFLIGHT only after checking the database can take it, or upgrade the Supabase/Hyperdrive tier." }
+
+  - name: a trickle of quota blocks does not alert
+    interval: 1m
+    input_series:
+      - series: 'marginpulse_events_total{event="db_unavailable",path="api"}'
+        values: '0 0 1 1 1 1 1 1'
+      - series: 'marginpulse_events_total{event="quota",outcome="blocked",resource="documents"}'
+        values: '0 1 2 3+0x70'
+    alert_rule_test:
+      - { eval_time: 7m, alertname: DatabaseUnavailable, exp_alerts: [] }
+      - { eval_time: 65m, alertname: FreePlanQuotaBlocking, exp_alerts: [] }

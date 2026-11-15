@@ -62,3 +62,69 @@ groups:
         for: 15m
         labels: { severity: warn }
         annotations: { summary: "More than 1 browser JS error per minute" }
+  - name: marginpulse-queues-and-cron
+    rules:
+      - alert: QueueTasksRetrying
+        expr: sum by (task) (increase(marginpulse_events_total{event="queue_task",outcome="retry"}[15m])) > 5
+        labels: { severity: warn }
+        annotations: { summary: "Background task is failing and being retried (OCR / reconciliation / GST / identity checks). Look at Workers Logs for task_failed with this task name." }
+      - alert: QueueTaskGaveUp
+        expr: sum by (task) (increase(marginpulse_events_total{event="queue_task",outcome="gave_up"}[1h])) > 0
+        labels: { severity: page }
+        annotations: { summary: "A background task used its whole retry budget and was dropped; the record stays PENDING. Provider outage? See task_gave_up in Workers Logs." }
+      - alert: CronRunFailed
+        expr: sum(increase(marginpulse_events_total{event="cron_run",outcome=~"error|tenant_error|purge_error"}[26h])) > 0
+        labels: { severity: warn }
+        annotations: { summary: "The daily sweep (missing-invoice detection + visitor retention purge) hit an error. See cron_failed / scheduled_sweep_failed_for_tenant in Workers Logs." }
+      - alert: CronNotRunning
+        expr: absent_over_time(marginpulse_events_total{event="cron_run",outcome="ok"}[27h])
+        labels: { severity: warn }
+        annotations: { summary: "No successful daily sweep in 27 hours: cron trigger missing/disabled, or telemetry export from the cron isolate is broken." }
+  - name: marginpulse-fallback-channels
+    rules:
+      - alert: UpiGatewayErrors
+        expr: sum(increase(marginpulse_events_total{event="payment",outcome="upi_gateway_error"}[10m])) > 2
+        labels: { severity: warn }
+        annotations: { summary: "The UPI backup gateway is failing to create orders (the Razorpay fallback is itself down)." }
+      - alert: UpiAmountMismatch
+        expr: sum(increase(marginpulse_events_total{event="payment",outcome="upi_mismatch"}[1h])) > 0
+        labels: { severity: warn }
+        annotations: { summary: "A UPI gateway 'paid' event did not match the amount/order we expected and was NOT applied. Check the order manually." }
+      - alert: WhatsAppGatewayWebhookErrors
+        expr: sum(increase(marginpulse_events_total{event="whatsapp_gateway",outcome="error"}[15m])) > 3
+        labels: { severity: warn }
+        annotations: { summary: "Inbound WhatsApp files are failing to be stored (storage/DB problem); the sidecar will retry from its disk spool." }
+      - alert: VisitorStoreFailures
+        expr: sum(increase(marginpulse_events_total{event="visit",outcome="db_error"}[15m])) > 10
+        labels: { severity: warn }
+        annotations: { summary: "Visitor analytics cannot write to the database (pages are unaffected: the beacon always answers 202)." }
+      # The next three come from the WhatsApp sidecar's own /metrics (scrape job `whatsapp-gateway` in prometheus.yml).
+      # They stay silent if you never deploy the sidecar, because the metrics are then absent (not zero).
+      - alert: WhatsAppDisconnected
+        expr: min(mp_wa_connection_up) == 0
+        for: 10m
+        labels: { severity: warn }
+        annotations: { summary: "The WhatsApp session has been disconnected for 10 minutes. If logged out: delete AUTH_DIR on the sidecar and scan the QR again." }
+      - alert: WhatsAppSpoolBacklog
+        expr: max(mp_wa_spool_files) > 0
+        for: 15m
+        labels: { severity: warn }
+        annotations: { summary: "WhatsApp files are waiting on the sidecar's disk because the Worker is rejecting or unreachable for 15+ minutes." }
+      - alert: WhatsAppForwardRejected
+        expr: sum(increase(mp_wa_forward_attempts_total{result=~"rejected_.*"}[15m])) > 0
+        labels: { severity: page }
+        annotations: { summary: "The Worker is rejecting the sidecar's messages (4xx). Most likely WA_GATEWAY_WEBHOOK_SECRET differs between the sidecar and the Worker." }
+  - name: marginpulse-capacity
+    rules:
+      - alert: DatabaseUnavailable
+        expr: sum(increase(marginpulse_events_total{event="db_unavailable"}[5m])) > 3
+        labels: { severity: page }
+        annotations: { summary: "The API is answering 503 because the database is unreachable or out of connections (Supabase paused/overloaded, Hyperdrive pool exhausted). Clients are retrying with backoff. Check Supabase status/connection count and Hyperdrive." }
+      - alert: LoadSheddingActive
+        expr: sum by (route) (increase(marginpulse_events_total{event="shed"}[10m])) > 50
+        labels: { severity: warn }
+        annotations: { summary: "Heavy endpoints (uploads/imports/reconcile) are refusing requests with 503 because too many are running at once. Expected during a surge; if sustained, raise MAX_HEAVY_INFLIGHT only after checking the database can take it, or upgrade the Supabase/Hyperdrive tier." }
+      - alert: FreePlanQuotaBlocking
+        expr: sum(increase(marginpulse_events_total{event="quota",outcome="blocked"}[1h])) > 20
+        labels: { severity: info }
+        annotations: { summary: "Many Free-plan users are hitting their monthly limit (402 PLAN_LIMIT) — an upgrade-conversion signal, or a limit set too low (FREE_DOCS_PER_MONTH / FREE_BANK_ROWS_PER_MONTH)." }

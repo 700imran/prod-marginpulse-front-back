@@ -17,6 +17,7 @@ services:
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
+      # - ./secrets/wa-gateway-token:/etc/prometheus/wa-gateway-token:ro   # enable together with the whatsapp-gateway scrape job in prometheus.yml
       - prom-data:/prometheus
     ports: ["127.0.0.1:9090:9090"]
     restart: unless-stopped
