@@ -1,3 +1,4 @@
+import { checkQuota } from "../billing/limits";
 import { emit } from "../observability/events";
 import { Hono } from "hono";
 import type { Env } from "../config";
@@ -168,6 +169,8 @@ reconciliationRoutes.post("/dataset-upload", rateLimit("dataset", 20, 60), async
       return n > (seen.get(k) ?? 0);
     });
     duplicates = data.bank.length - fresh.length;
+    const over = await checkQuota(sql, c.env, tenantId, c.get("tenant").planTier, { bankRows: fresh.length });
+    if (over) return c.json(over, 402); // nothing has been written yet: the whole file is refused, never half-imported
     created = await bulkInsertBankTransactions(sql, fresh.map((r) => ({
       tenantId, narration: r.narration, transactionDate: r.date, debitAmount: r.debit, creditAmount: r.credit,
       bankReference: r.reference, bankName: body.bankName ?? "", sourceFilename: fileName,
@@ -179,6 +182,8 @@ reconciliationRoutes.post("/dataset-upload", rateLimit("dataset", 20, 60), async
     const dedupe = makeInvoiceDeduper(existing.map((e) => ({ vendor: e.vendorName ?? "", invoiceNo: e.invoiceNumber ?? "", total: parseFloat(e.rawTotalAmount ?? "0") || 0, date: e.documentDate ?? "", gstin: e.taxIdentifier ?? "", docType: e.docType === "CREDIT_NOTE" ? "CREDIT_NOTE" : "INVOICE" })));
     const fresh = data.invoices.filter((r) => !dedupe.seen({ vendor: r.vendor, invoiceNo: r.invoiceNo, total: r.total, date: r.date, gstin: r.gstin, docType: r.docType === "CREDIT_NOTE" ? "CREDIT_NOTE" : "INVOICE" }));
     duplicates = data.invoices.length - fresh.length;
+    const over = await checkQuota(sql, c.env, tenantId, c.get("tenant").planTier, { docs: fresh.length });
+    if (over) return c.json(over, 402);
     created = await bulkInsertDatasetDocuments(sql, fresh.map((r) => ({
       tenantId, docType: r.docType, originalFilename: fileName, vendorName: r.vendor || null, documentDate: r.date, invoiceNumber: r.invoiceNo || null,
       rawTotalAmount: r.total, taxAmount: r.tax || null, taxIdentifier: r.gstin || null,

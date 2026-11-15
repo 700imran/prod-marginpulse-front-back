@@ -30,6 +30,34 @@ export interface Env {
   TURNSTILE_SITE_KEY?: string;        // public Turnstile site key (var). Empty = captcha disabled
   TURNSTILE_SECRET?: string;          // Turnstile secret key (`wrangler secret put TURNSTILE_SECRET`)
 
+  // --- capacity controls (all optional; see docs/CAPACITY.md) ---
+  FREE_DOCS_PER_MONTH?: string;        // FREE plan: documents created per calendar month (default 300; "0" = unlimited)
+  FREE_BANK_ROWS_PER_MONTH?: string;   // FREE plan: bank rows imported per calendar month (default 5000; "0" = unlimited)
+  MAX_HEAVY_INFLIGHT?: string;         // concurrent uploads/imports/reconciles per isolate before shedding with 503 (default 8; "0" = off)
+
+  CRON_MAX_TENANTS?: string;           // safety cap on tenants enqueued per daily run (default 200000)
+
+  // --- optional UPI fallback payments (off unless UPI_FALLBACK_ENABLED="true"; see src/billing/upi.ts) ---
+  UPI_FALLBACK_ENABLED?: string;
+  UPI_VPA?: string;                   // manual mode: the VPA customers pay, e.g. marginpulse@okhdfcbank
+  UPI_PAYEE_NAME?: string;            // shown in the customer's UPI app (default "MarginPulse")
+  UPI_GATEWAY_BASE_URL?: string;      // gateway mode: your self-hosted upi-gateway, https://pay.example.com
+  UPI_GATEWAY_API_KEY?: string;       // secret
+  UPI_GATEWAY_API_SECRET?: string;    // secret
+  UPI_GATEWAY_WEBHOOK_SECRET?: string; // secret — the LIVE webhook signing secret from the gateway dashboard
+
+  // --- optional WhatsApp gateway (Baileys sidecar, extensions/whatsapp-gateway) ---
+  WA_GATEWAY_NUMBER?: string;         // display only: the gateway's WhatsApp number (digits, with country code) users send LINK codes to
+  WA_GATEWAY_URL?: string;            // https URL of the sidecar; used to SEND messages
+  WA_GATEWAY_TOKEN?: string;          // secret — bearer token the Worker uses when calling the sidecar
+  WA_GATEWAY_WEBHOOK_SECRET?: string; // secret — HMAC key the sidecar uses to sign inbound messages to the Worker
+
+  // --- optional visitor tracking (consent-gated; see src/routes/track.ts) ---
+  TRACKING_ORIGINS?: string;          // comma-separated marketing-site origins allowed to POST /api/v1/track/* (the app's FRONTEND_ORIGIN is always allowed)
+  FPJS_SECRET_KEY?: string;           // Fingerprint *Server API* secret (wrangler secret). Empty = first-party random id only
+  FPJS_API_BASE?: string;             // https://api.fpjs.io (global), https://ap.api.fpjs.io (Asia), https://eu.api.fpjs.io
+  VISITOR_RETENTION_DAYS?: string;    // default 90
+
   // --- optional telemetry (all off unless set) ---
   OTLP_ENDPOINT?: string;             // e.g. https://otlp-gateway-prod-ap-south-1.grafana.net/otlp  or your collector URL
   OTLP_HEADERS?: string;              // "Authorization=Basic <base64 instanceId:token>" (secret)

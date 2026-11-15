@@ -46,7 +46,7 @@ export async function startHarness(): Promise<Harness> {
     UPSTASH_REDIS_REST_URL: `${base}/upstash`, UPSTASH_REDIS_REST_TOKEN: "x",
     HYPERDRIVE: { connectionString: DB_URL },
     GST_API_BASE_URL: "", GST_API_CLIENT_ID: "", GST_API_CLIENT_SECRET: "", GST_API_USERNAME: "",
-    AI_INSIGHTS_DAILY_BUDGET_USD: "5.00", ...queues,
+    AI_INSIGHTS_DAILY_BUDGET_USD: "5.00", FREE_DOCS_PER_MONTH: "0", FREE_BANK_ROWS_PER_MONTH: "0", MAX_HEAVY_INFLIGHT: "0", ...queues,
   };
   const admin = postgres(DB_URL, { max: 2 });
   const pending: Promise<unknown>[] = [];

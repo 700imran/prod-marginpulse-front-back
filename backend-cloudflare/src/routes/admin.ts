@@ -8,6 +8,8 @@ import { pickValid } from "../security/validate";
 import { getPlatformSettings, updatePlatformSettings, getSlackAppConfig, setSlackAppConfig, type PlatformSettings } from "../repository/platformSettings";
 import { listAllTenants, setTenantActive, countTenants, getTenantById } from "../repository/tenants";
 import { encryptField } from "../security/fieldEncryption";
+import { visitorSummary } from "../repository/visitors";
+import { upiAdminRoutes } from "./upi";
 
 export const adminRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
@@ -103,3 +105,8 @@ adminRoutes.get("/stats", async (c) => {
   const total = await countTenants(sql);
   return c.json({ total_tenants: total, active_tenants: active, suspended_count: items.length - active });
 });
+
+// GET /admin/visitors/summary?days=30 — aggregate visitor analytics for the marketing site and the app
+// (unique / new / returning visitors, sessions, top cities, countries, devices, browsers). Aggregates only: no ids, no IPs.
+adminRoutes.get("/visitors/summary", async (c) => c.json(await visitorSummary(c.get("sql"), Number(c.req.query("days")) || 30)));
+adminRoutes.route("/upi-payments", upiAdminRoutes); // manual UPI payments awaiting review

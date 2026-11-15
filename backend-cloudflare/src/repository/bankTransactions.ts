@@ -89,3 +89,18 @@ export async function listUnmatchedInDateRange(sql: Sql, tenantId: string, fromD
     [tenantId, fromDate, toDate],
   );
 }
+
+/**
+ * Tenants that could possibly have a "paid but no invoice" anomaly: an old UNMATCHED debit AND at least one vendor name on
+ * file. Keyset-paginated (stable under concurrent inserts, uses idx_banktx_tenant_status_date), so the daily sweep touches
+ * only tenants with work to do instead of every tenant ever created.
+ */
+export async function listMissingInvoiceCandidateTenants(sql: Sql, cutoffDate: string, afterTenantId: string | null, limit: number): Promise<string[]> {
+  const rows = await sql<{ tenantId: string }[]>`
+    select distinct b.tenant_id as "tenantId" from bank_transactions b
+    where b.reconciliation_status = 'UNMATCHED' and b.debit_amount > 0 and b.transaction_date <= ${cutoffDate}
+      and b.tenant_id > ${afterTenantId ?? "00000000-0000-0000-0000-000000000000"}
+      and exists (select 1 from documents d where d.tenant_id = b.tenant_id and d.vendor_name is not null and d.vendor_name <> '')
+    order by b.tenant_id limit ${limit}`;
+  return rows.map((r) => r.tenantId);
+}

@@ -6,10 +6,13 @@ import type { TenantContext } from "./auth/supabase";
 import { withDb } from "./middleware/db";
 import { publicConfigRoutes } from "./routes/publicConfig";
 import { telemetry, telemetryRoutes } from "./observability/telemetry";
-import { emit } from "./observability/events";
+import { emit, registry, setSink } from "./observability/events";
+import { flushPending } from "./observability/metrics";
 import { requestId, securityHeaders, corsMiddleware, requestSizeLimit } from "./middleware/security";
 import { rateLimit, isolateRateLimit } from "./middleware/rateLimit";
 import { ValidationError } from "./security/validate";
+import { shedHeavy } from "./middleware/shed";
+import { isDbUnavailable, retryAfterSeconds } from "./lib/dbErrors";
 import { claimOnce } from "./ratelimit";
 import { healthRoutes } from "./routes/health";
 import { authRoutes } from "./routes/auth";
@@ -26,9 +29,11 @@ import { adminRoutes } from "./routes/admin";
 import { integrationRoutes } from "./routes/integrations";
 import { billingRoutes } from "./routes/billing";
 import { webhookRoutes } from "./routes/webhooks";
+import { trackRoutes } from "./routes/track";
+import { purgeOldVisitors } from "./repository/visitors";
 import { handleQueueBatch } from "./queue/consumer";
 import { getDb } from "./db";
-import { listAllTenants } from "./repository/tenants";
+import { listMissingInvoiceCandidateTenants } from "./repository/bankTransactions";
 import { detectMissingInvoices } from "./pipelines/missingInvoice";
 
 export const app = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
@@ -41,8 +46,14 @@ app.use("/api/v1/roi/*", rateLimit("roi", 20, 60));
 // Payments must not depend on Redis being up: the zero-latency per-isolate limiter is the always-on backstop and the
 // Upstash limiter (1.5 s timeout) adds global limits; if Redis is down we fail OPEN and count it (ratelimit_backend_error).
 app.use("/api/v1/billing/*", isolateRateLimit(30, 60), rateLimit("billing", 30, 60));
+app.use("/api/v1/track/*", isolateRateLimit(30, 60), rateLimit("track", 30, 60));
 app.use("/webhook/*", rateLimit("webhook", 300, 60));
 app.use("/api/razorpay/*", rateLimit("rzp-webhook", 300, 60));
+// Load shedding for the expensive endpoints, BEFORE any auth/DB work: refuse the excess in microseconds with 503 + Retry-After.
+app.use("/api/v1/documents/upload", shedHeavy("upload"));
+app.use("/api/v1/reconciliation/dataset-upload", shedHeavy("dataset_upload"));
+app.use("/api/v1/reconciliation/run", shedHeavy("reconcile_run"));
+app.use("/api/v1/reconciliation/export", shedHeavy("export"));
 app.use("*", withDb);
 
 // health check sits outside /api/v1, same as the Go router
@@ -50,6 +61,7 @@ app.route("/", healthRoutes);
 
 app.use("/api/v1/telemetry", isolateRateLimit(120, 60));
 app.route("/api/v1/telemetry", telemetryRoutes);
+app.route("/api/v1/track", trackRoutes); // public + credential-less + consent-gated — see routes/track.ts
 app.route("/api/v1/config", publicConfigRoutes);
 app.route("/api/v1/auth", authRoutes);
 app.route("/api/v1/documents", documentRoutes);
@@ -122,6 +134,14 @@ app.post("/api/razorpay/webhook", async (c) => {
 app.notFound((c) => c.json({ error: "not found" }, 404));
 app.onError((err, c) => {
   if (err instanceof ValidationError) return c.json({ error: err.message, field: err.field }, 422);
+  // Database overloaded / unreachable (pool exhausted, connect timeout, failover): that is "retry shortly", not a bug.
+  if (isDbUnavailable(err)) {
+    const wait = retryAfterSeconds();
+    emit("db_unavailable", { path: "api" });
+    console.error(JSON.stringify({ level: "error", msg: "db_unavailable", requestId: c.get("requestId" as never), path: c.req.path, code: (err as { code?: string }).code, error: err.message }));
+    c.header("Retry-After", String(wait));
+    return c.json({ error: "The service is busy right now. Please retry in a few seconds.", code: "BUSY", retryable: true, retryAfterSeconds: wait, requestId: c.get("requestId" as never) }, 503);
+  }
   // Never leak stack traces / SQL / internals to the client; correlate via request id.
   console.error("unhandled_error", { requestId: c.get("requestId" as never), path: c.req.path, error: err.message });
   return c.json({ error: "internal server error", requestId: c.get("requestId" as never) }, 500);
@@ -132,29 +152,59 @@ export default {
 
   // Cloudflare Queues consumer — drains all 5 queues (wrangler.toml),
   // dispatching by the message's "task" field. See queue/consumer.ts.
-  async queue(batch: MessageBatch, env: Env): Promise<void> {
-    await handleQueueBatch(batch as MessageBatch<any>, env);
+  async queue(batch: MessageBatch, env: Env, ctx?: ExecutionContext): Promise<void> {
+    setSink(env);
+    try { await handleQueueBatch(batch as MessageBatch<any>, env); }
+    finally { const f = flushPending(registry, env); try { ctx?.waitUntil(f); } catch { void f; } } // no HTTP middleware runs in a queue isolate, so push metrics here
   },
 
-  // Cron Trigger (wrangler.toml: daily at 03:00) — replaces the
-  // never-built EventBridge rule from ROADMAP.md for a daily
-  // detect-missing-invoices sweep across every tenant.
+  // Cron Trigger (wrangler.toml: daily at 03:00) — replaces the never-built EventBridge rule from ROADMAP.md.
+  // Fans the daily missing-invoice detection OUT to the queue, one message per tenant that actually has candidate data
+  // (an old unmatched debit and at least one vendor on file). It used to loop over the first 1000 tenants inside this one
+  // invocation: tenants beyond 1000 were never checked, and a long loop would hit the cron's time/CPU limits.
   async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    setSink(env);
     const sql = getDb(env);
+    const t0 = Date.now();
     try {
-      const tenants = await listAllTenants(sql, 1000, 0);
-      for (const tenant of tenants) {
-        try {
-          const result = await detectMissingInvoices(sql, tenant.tenantId);
-          if (result.anomaliesCreated > 0) {
-            console.log("scheduled_missing_invoice_sweep", { tenantId: tenant.tenantId, ...result });
+      const cutoff = new Date(Date.now() - 5 * 86_400_000).toISOString().slice(0, 10); // same "older than 5 days" rule as detectMissingInvoices
+      const maxTenants = Number(env.CRON_MAX_TENANTS) || 200_000; // per run; a runaway query can never enqueue forever
+      let after: string | null = null, enqueued = 0;
+      for (;;) {
+        const ids = await listMissingInvoiceCandidateTenants(sql, cutoff, after, 500);
+        if (ids.length === 0) break;
+        after = ids[ids.length - 1]!;
+        if (env.RECONCILE_QUEUE) {
+          for (let i = 0; i < ids.length; i += 100) { // Queues accept at most 100 messages per sendBatch
+            await env.RECONCILE_QUEUE.sendBatch(ids.slice(i, i + 100).map((tenantId) => ({ body: { task: "detect_missing_invoices", job_id: crypto.randomUUID(), args: { tenant_id: tenantId } } })));
           }
-        } catch (e) {
-          console.error("scheduled_sweep_failed_for_tenant", { tenantId: tenant.tenantId, error: (e as Error).message });
+        } else {
+          // No queue bound (local/dev): run inline, but only a bounded number so this path can never stall a real cron.
+          for (const tenantId of ids.slice(0, Math.max(0, 200 - enqueued))) {
+            try { await detectMissingInvoices(sql, tenantId); } catch (e) { emit("cron_run", { outcome: "tenant_error" }); console.error("scheduled_sweep_failed_for_tenant", { tenantId, error: (e as Error).message }); }
+          }
         }
+        enqueued += ids.length;
+        if (enqueued >= maxTenants) { console.warn(JSON.stringify({ level: "warn", msg: "cron_tenant_cap_reached", cap: maxTenants })); break; }
       }
+      emit("cron_enqueued", { task: "missing_invoice" }, enqueued);
+      // Retention: visitor rows older than VISITOR_RETENTION_DAYS (default 90) are deleted, so analytics never becomes an archive.
+      try {
+        const purged = await purgeOldVisitors(sql, Number(env.VISITOR_RETENTION_DAYS) || 90);
+        if (purged > 0) console.log(JSON.stringify({ level: "info", msg: "visitors_purged", purged }));
+      } catch (e) {
+        emit("cron_run", { outcome: "purge_error" });
+        console.error(JSON.stringify({ level: "error", msg: "visitor_purge_failed", error: (e as Error).message }));
+      }
+      emit("cron_run", { outcome: "ok" });
+      registry.observe("marginpulse.cron.duration", "s", (Date.now() - t0) / 1000, { task: "daily_sweep" }); // NOT "job"/"instance": those collide with Prometheus's reserved target labels and the collector drops the whole metric
+    } catch (e) {
+      emit("cron_run", { outcome: "error" });
+      console.error(JSON.stringify({ level: "error", msg: "cron_failed", error: (e as Error).message }));
+      throw e; // let Cloudflare record the invocation as failed
     } finally {
       ctx.waitUntil(sql.end());
+      ctx.waitUntil(flushPending(registry, env));
     }
   },
 };

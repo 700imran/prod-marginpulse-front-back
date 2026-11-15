@@ -17,6 +17,7 @@ export function createSql(connectionString: string) {
     max: 5,
     fetch_types: false, // skip an extra round trip on cold start; we don't use custom types
     idle_timeout: 5,
+    connect_timeout: 10, // seconds: a dead/overloaded database answers 503 quickly instead of hanging the request until the platform kills it
     types: { date: dateAsText },
   });
 }

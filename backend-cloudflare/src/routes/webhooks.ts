@@ -1,3 +1,4 @@
+import { checkQuotaForTenant } from "../billing/limits";
 import { emit } from "../observability/events";
 import { Hono } from "hono";
 import type { Env } from "../config";
@@ -10,6 +11,10 @@ import { constantTimeEqual, isTrustedMediaUrl } from "../security/webhookAuth";
 import { validateUpload, safeFilename } from "../security/upload";
 import { isProd } from "../config";
 import { fetchExternal, EXTERNAL_TIMEOUTS } from "../lib/external";
+import { upiGatewayWebhook } from "./upi";
+import { verifyTimestampedHmac } from "../billing/upi";
+import { claimWebhookEvent, releaseWebhookEvent } from "../repository/webhookEvents";
+import { consumeLinkCode, LINK_TEXT_RE } from "../repository/whatsappLink";
 
 // Unauthenticated by nature — these are called by Meta/an email relay,
 // not by a logged-in tenant. Mounted separately in src/index.ts (not
@@ -59,6 +64,28 @@ async function downloadWhatsAppMedia(env: Env, mediaId: string): Promise<{ data:
   return { data, mimeType: meta.mime_type ?? "" };
 }
 
+/** Validate → store in R2 → create the document row → queue OCR. Shared by Meta's webhook and the WhatsApp gateway webhook. */
+export async function storeWhatsAppDocument(env: Env, sql: Sql, tenantId: string, m: { messageId: string; from: string; filename: string; mimeType: string; data: ArrayBuffer }):
+  Promise<{ ok: true; documentId: string; filename: string } | { ok: false; reason: string; quota?: boolean }> {
+  const base = safeFilename(m.filename || "whatsapp-media");
+  const ext = /\.[a-z0-9]{2,4}$/i.test(m.filename || "") ? "" : m.mimeType === "application/pdf" ? ".pdf" : m.mimeType === "image/png" ? ".png" : ".jpg";
+  const verdict = validateUpload(base + ext, m.data.byteLength, new Uint8Array(m.data.slice(0, 16)));
+  if (!verdict.ok) { console.warn("whatsapp media rejected", { reason: verdict.error }); return { ok: false, reason: verdict.error }; }
+  const over = await checkQuotaForTenant(sql, env, tenantId, { docs: 1 });
+  if (over) return { ok: false, reason: over.error, quota: true };
+  const storageKey = `${tenantId}/${new Date().toISOString().slice(0, 10).replace(/-/g, "/")}/${crypto.randomUUID()}`;
+  try {
+    await uploadBytes(env, storageKey, m.data, verdict.mime);
+    const doc = await createDocument(sql, { tenantId, docType: "INVOICE", originalFilename: base, storageKey, mimeType: verdict.mime, fileSizeBytes: m.data.byteLength, ingestChannel: "WHATSAPP" });
+    await sql`update documents set whatsapp_message_id = ${m.messageId}, sender_phone = ${m.from} where tenant_id = ${tenantId} and document_id = ${doc.documentId}`;
+    await env.OCR_QUEUE.send({ task: "run_ocr_pipeline", job_id: crypto.randomUUID(), args: { tenant_id: tenantId, document_id: doc.documentId, storage_key: storageKey, mime_type: verdict.mime } });
+    return { ok: true, documentId: doc.documentId, filename: base };
+  } catch (e) {
+    console.error("whatsapp document ingest failed", { error: (e as Error).message });
+    throw e;
+  }
+}
+
 webhookRoutes.post("/whatsapp", async (c) => {
   const rawBody = await c.req.text();
   if (!c.env.WHATSAPP_APP_SECRET && isProd(c.env)) {
@@ -105,24 +132,63 @@ webhookRoutes.post("/whatsapp", async (c) => {
           return null;
         });
         if (!media) continue;
-        const verdict = validateUpload(safeFilename(filename || "whatsapp-media") + (/\.[a-z0-9]{2,4}$/i.test(filename || "") ? "" : mimeType === "application/pdf" ? ".pdf" : mimeType === "image/png" ? ".png" : ".jpg"), media.data.byteLength, new Uint8Array(media.data.slice(0, 16)));
-        if (!verdict.ok) { console.warn("whatsapp media rejected", { reason: verdict.error }); continue; }
-        mimeType = verdict.mime;
-        filename = safeFilename(filename || "whatsapp-media");
-
-        const storageKey = `${tenant.tenantId}/${new Date().toISOString().slice(0, 10).replace(/-/g, "/")}/${crypto.randomUUID()}`;
-        try {
-          await uploadBytes(c.env, storageKey, media.data, mimeType);
-          const doc = await createDocument(sql, { tenantId: tenant.tenantId, docType: "INVOICE", originalFilename: filename, storageKey, mimeType, fileSizeBytes: media.data.byteLength, ingestChannel: "WHATSAPP" });
-          await sql`update documents set whatsapp_message_id = ${msg.id}, sender_phone = ${msg.from} where tenant_id = ${tenant.tenantId} and document_id = ${doc.documentId}`;
-          await c.env.OCR_QUEUE.send({ task: "run_ocr_pipeline", job_id: crypto.randomUUID(), args: { tenant_id: tenant.tenantId, document_id: doc.documentId, storage_key: storageKey, mime_type: mimeType } });
-        } catch (e) {
-          console.error("whatsapp document ingest failed", { error: (e as Error).message });
-        }
+        try { await storeWhatsAppDocument(c.env, sql, tenant.tenantId, { messageId: msg.id, from: msg.from, filename, mimeType, data: media.data }); }
+        catch { /* already logged; one bad message must not fail Meta's whole delivery batch */ }
       }
     }
   }
   return c.json({ status: "received" });
+});
+
+webhookRoutes.post("/upi-gateway", upiGatewayWebhook as never);
+
+// ── WhatsApp gateway (Baileys sidecar, extensions/whatsapp-gateway) ──────────
+// The sidecar is a logged-in WhatsApp Web session on a spare number. It forwards each inbound document/image here, signed
+// `t=<unix>,v1=<hmac("t.rawBody")>` (same scheme as the UPI gateway), and sends back whatever we put in `reply`.
+// Free alternative for testing when the official Cloud API isn't available; it is NOT an official WhatsApp channel.
+webhookRoutes.post("/whatsapp-gateway", async (c) => {
+  if (!c.env.WA_GATEWAY_WEBHOOK_SECRET) return c.json({ error: "webhook not configured" }, 503);
+  const raw = await c.req.text();
+  const sig = await verifyTimestampedHmac(c.env.WA_GATEWAY_WEBHOOK_SECRET, raw, c.req.header("X-WA-Signature"));
+  if (!sig.ok) { emit("webhook_rejected", { reason: sig.reason, source: "whatsapp_gateway" }); return c.json({ error: "Invalid signature" }, 401); }
+
+  let m: { event_id?: unknown; type?: unknown; from?: unknown; filename?: unknown; mime_type?: unknown; data_base64?: unknown; text?: unknown };
+  try { m = JSON.parse(raw); } catch { return c.json({ error: "invalid json" }, 400); }
+  const eventId = typeof m.event_id === "string" && /^[A-Za-z0-9_.-]{6,128}$/.test(m.event_id) ? m.event_id : null;
+  const from = typeof m.from === "string" && /^\d{8,15}$/.test(m.from) ? m.from : null;
+  const isFile = (m.type === "document" || m.type === "image") && typeof m.data_base64 === "string";
+  const isText = m.type === "text" && typeof m.text === "string" && m.text.length <= 100;
+  if (!eventId || !from || !(isFile || isText)) return c.json({ error: "event_id, from and either (type document|image + data_base64) or (type text + text) are required" }, 400);
+  if (isFile && (m.data_base64 as string).length > 21 * 1024 * 1024) return c.json({ error: "file too large" }, 413);
+
+  const sql = c.get("sql");
+  if (!(await claimWebhookEvent(sql, "whatsapp_gateway", eventId))) return c.json({ status: "duplicate" });
+  try {
+    if (isText) { // the only text we act on is `LINK <code>`; anything else is ignored silently (never answer strangers)
+      const lm = LINK_TEXT_RE.exec(m.text as string);
+      if (!lm) return c.json({ status: "ignored_text" });
+      const r = await consumeLinkCode(sql, lm[1]!, from);
+      emit("whatsapp_gateway", { outcome: r.ok ? "linked" : "link_" + r.reason });
+      if (r.ok) return c.json({ status: "linked", reply: "✅ This WhatsApp number is now linked to your MarginPulse account. Send invoices here as PDF or photos and they will appear under Documents." });
+      return c.json({ status: "link_failed", reply: r.reason === "conflict" ? "This number is already linked to another MarginPulse account. Unlink it there first." : "That code is invalid or has expired. Generate a new one in MarginPulse and try again." });
+    }
+    const tenant = await getTenantByWhatsAppPhone(sql, from);
+    if (!tenant) { emit("whatsapp_gateway", { outcome: "unbound_number" }); return c.json({ status: "unbound_number" }); } // no reply: never message strangers from a ban-prone number
+    let data: ArrayBuffer;
+    try { data = base64ToArrayBuffer(m.data_base64 as string); } catch { return c.json({ status: "rejected", reply: "Sorry, we couldn't read that file." }); }
+    const r = await storeWhatsAppDocument(c.env, sql, tenant.tenantId, { messageId: eventId, from, filename: typeof m.filename === "string" ? m.filename : (m.type === "image" ? "whatsapp-image" : "whatsapp-document"), mimeType: typeof m.mime_type === "string" ? m.mime_type : "", data });
+    if (!r.ok) {
+      emit("whatsapp_gateway", { outcome: r.quota ? "plan_limit" : "rejected" });
+      return c.json({ status: "rejected", reply: r.quota ? "Your MarginPulse Free plan's monthly document limit is reached, so this file was not added. Upgrade in the app to add more." : "Sorry, we can only accept PDF, JPG or PNG files up to 15 MB." });
+    }
+    emit("whatsapp_gateway", { outcome: "received" });
+    return c.json({ status: "received", documentId: r.documentId, reply: `✅ Received ${r.filename}. It will appear under Documents in MarginPulse shortly.` });
+  } catch (e) {
+    await releaseWebhookEvent(sql, "whatsapp_gateway", eventId).catch(() => {}); // let the sidecar's retry process it
+    emit("whatsapp_gateway", { outcome: "error" });
+    console.error(JSON.stringify({ level: "error", msg: "whatsapp_gateway_failed", eventId, error: (e as Error).message }));
+    return c.json({ error: "temporarily unable to process" }, 500);
+  }
 });
 
 webhookRoutes.post("/email-ingest", async (c) => {
@@ -150,6 +216,7 @@ webhookRoutes.post("/email-ingest", async (c) => {
     const name = safeFilename(String(att.filename ?? "attachment"));
     const verdict = validateUpload(name, data.byteLength, new Uint8Array(data.slice(0, 16)));
     if (!verdict.ok) { console.warn("email attachment rejected", { reason: verdict.error }); continue; }
+    if (await checkQuotaForTenant(sql, c.env, tenant.tenantId, { docs: 1 })) { emit("quota", { resource: "documents", outcome: "email_dropped" }); continue; }
     const storageKey = `${tenant.tenantId}/${new Date().toISOString().slice(0, 10).replace(/-/g, "/")}/${crypto.randomUUID()}-${name}`;
     try {
       await uploadBytes(c.env, storageKey, data, verdict.mime);

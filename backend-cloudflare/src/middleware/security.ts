@@ -41,11 +41,25 @@ export function primaryOrigin(env: Pick<Env, "FRONTEND_ORIGIN">): string {
   return allowedOrigins(env)[0] ?? "";
 }
 
+// Visitor tracking is called cross-origin from the marketing site (and the app). It is credential-less (no cookies, no
+// Authorization), so it gets its own, narrower rule: the origin must be on TRACKING_ORIGINS or FRONTEND_ORIGIN, and
+// Access-Control-Allow-Credentials is never sent.
+export function trackingOrigins(env: Pick<Env, "TRACKING_ORIGINS">): string[] {
+  return (env.TRACKING_ORIGINS ?? "").split(",").map((o) => o.trim().replace(/\/$/, "")).filter(Boolean);
+}
+
 export function corsMiddleware(): MiddlewareHandler<{ Bindings: Env }> {
   return async (c, next) => {
     const origin = c.req.header("Origin");
     c.header("Vary", "Origin");
-    if (origin && allowedOrigins(c.env).includes(origin)) {
+    const isTrack = c.req.path.startsWith("/api/v1/track/");
+    if (origin && isTrack && [...allowedOrigins(c.env), ...trackingOrigins(c.env)].includes(origin)) {
+      c.header("Access-Control-Allow-Origin", origin);
+      c.header("Access-Control-Allow-Methods", "POST,DELETE,OPTIONS");
+      c.header("Access-Control-Allow-Headers", "Content-Type,X-Request-Id");
+      c.header("Access-Control-Expose-Headers", "X-Request-Id,Retry-After");
+      c.header("Access-Control-Max-Age", "600");
+    } else if (origin && !isTrack && allowedOrigins(c.env).includes(origin)) {
       c.header("Access-Control-Allow-Origin", origin);
       c.header("Access-Control-Allow-Credentials", "true");
       c.header("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
@@ -63,6 +77,7 @@ export function corsMiddleware(): MiddlewareHandler<{ Bindings: Env }> {
 const ceilingFor = (path: string): number =>
   path.endsWith("/documents/upload") ? 16 * 1024 * 1024
   : path.endsWith("/reconciliation/dataset-upload") ? 12 * 1024 * 1024
+  : path === "/webhook/whatsapp-gateway" ? 22 * 1024 * 1024 // a base64 file up to ~15 MB
   : path.startsWith("/webhook") || path.startsWith("/api/razorpay") ? 1024 * 1024
   : 256 * 1024;
 

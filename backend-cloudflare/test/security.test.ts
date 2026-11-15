@@ -126,7 +126,9 @@ after(() => { globalThis.fetch = realFetch; });
 // Public by design: ROI calculator (pure arithmetic) and the Slack OAuth redirect target (protected by a one-time CSRF state).
 // Intentionally public: ROI (guarded by Turnstile for anonymous callers), OAuth callback, and the login screen's
 // captcha site-key lookup (public value only, covered by turnstile.test.ts).
-const PUBLIC = new Set(["/api/v1/roi", "/api/v1/roi/", "/api/v1/integrations/slack/callback", "/api/v1/config/public"]);
+// /api/v1/track/* is the consent-gated visitor analytics beacon for the marketing site: public and credential-less by design
+// (origin allow-list + consent flag + rate limit; covered by visitors-integration.test.ts), so it cannot answer 401.
+const PUBLIC = new Set(["/api/v1/roi", "/api/v1/roi/", "/api/v1/integrations/slack/callback", "/api/v1/config/public", "/api/v1/track/visit", "/api/v1/track/visitor"]);
 test("every /api/v1 route rejects requests without a bearer token (401)", async () => {
   const routes = app.routes.filter((r) => r.path.startsWith("/api/v1") && r.method !== "ALL" && !PUBLIC.has(r.path));
   assert.ok(routes.length > 30, `expected many routes, got ${routes.length}`);
@@ -171,7 +173,8 @@ test("errors never leak internals and health does not disclose environment", asy
 // ── Static guards ───────────────────────────────────────────────────────
 test("every public table is covered by the RLS migration", () => {
   const schema = fs.readFileSync(path.resolve(SRC, "../db/schema.sql"), "utf8");
-  const mig = fs.readFileSync(path.resolve(SRC, "../db/002_security_hardening.sql"), "utf8");
+  // RLS may live in 002 (original tables) or in the migration that creates a later table (003 visitors, 004 fallbacks).
+  const mig = ["002_security_hardening.sql", "003_visitors.sql", "004_fallbacks.sql"].map((f) => fs.readFileSync(path.resolve(SRC, "../db", f), "utf8")).join("\n");
   const tables = [...schema.matchAll(/create table if not exists public\.(\w+)/g)].map((m) => m[1]!);
   assert.ok(tables.length >= 13);
   for (const t of tables) assert.match(mig, new RegExp(`alter table public\\.${t}\\s+enable row level security`), `RLS missing for ${t}`);

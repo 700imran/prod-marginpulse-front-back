@@ -8,17 +8,9 @@ import { hmacSha256Hex, timingSafeEqual } from "../lib_razorpay_sig";
 import { invalidateTenantCache } from "../auth/supabase";
 import { appendAuditLog } from "../repository/auditLog";
 
-// Prices live on the SERVER. The client only says which plan it wants — it can
-// never choose the amount (previously POST {amount: 1} bought any plan for Rs 1).
-// Keep in sync with PLAN_OPTIONS in frontend BillingView.jsx (display only).
-export const PLANS = {
-  starter: { tier: "STARTER", priceInr: 499, rank: 1 },
-  pro: { tier: "GROWTH", priceInr: 1499, rank: 2 },
-  enterprise: { tier: "ENTERPRISE", priceInr: 4999, rank: 3 },
-} as const;
-type PlanId = keyof typeof PLANS;
-const isPlanId = (v: unknown): v is PlanId => typeof v === "string" && Object.prototype.hasOwnProperty.call(PLANS, v);
-const TIER_RANK: Record<string, number> = { FREE: 0, STARTER: 1, GROWTH: 2, ENTERPRISE: 3 };
+import { upiRoutes } from "./upi";
+import { PLANS, TIER_RANK, isPlanId, type PlanId } from "../billing/plans";
+export { PLANS };
 
 async function fetchWithTimeout(
   input: RequestInfo | URL,
@@ -44,6 +36,7 @@ type BillingCtx = Context<{ Bindings: Env; Variables: { sql: Sql; tenant: Tenant
 export const billingRoutes = new Hono<{ Bindings: Env; Variables: { sql: Sql; tenant: TenantContext } }>();
 
 billingRoutes.use("*", requireAuth);
+billingRoutes.route("/upi", upiRoutes); // backup payments — see routes/upi.ts
 
 billingRoutes.get("/usage", async (c) => {
   const tenant = c.get("tenant");

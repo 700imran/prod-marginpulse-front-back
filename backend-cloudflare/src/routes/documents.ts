@@ -1,3 +1,4 @@
+import { checkQuota } from "../billing/limits";
 import { emit } from "../observability/events";
 import { Hono } from "hono";
 import type { Env } from "../config";
@@ -54,6 +55,8 @@ documentRoutes.post("/upload", rateLimit("upload", 40, 60), async (c) => {
 
   const tenant = c.get("tenant");
   const sql = c.get("sql");
+  const over = await checkQuota(sql, c.env, tenant.tenantId, tenant.planTier, { docs: 1 });
+  if (over) return c.json(over, 402);
   const doc = await createDocument(sql, {
     tenantId: tenant.tenantId,
     docType,

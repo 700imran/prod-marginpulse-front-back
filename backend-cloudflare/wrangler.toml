@@ -124,6 +124,14 @@ LLM_MAX_TOKENS = "1024"
 AI_MAX_PROMPT_TOKENS = "8000"
 AI_MAX_COMPLETION_TOKENS = "2000"
 FRONTEND_ORIGIN = "https://app.marginpulse.in,https://prod-marginpulse-frontend.imrankhan210r.workers.dev"
+# Marketing-site origins allowed to send credential-less visit beacons (POST/DELETE /api/v1/track/*). The app's own
+# origin comes from FRONTEND_ORIGIN. Visits are only counted after the visitor accepts the cookie banner.
+TRACKING_ORIGINS = "https://marginpulse.in,https://www.marginpulse.in"
+VISITOR_RETENTION_DAYS = "90"
+# Capacity controls (docs/CAPACITY.md). FREE limits are placeholders — decide them deliberately; "0" = unlimited.
+FREE_DOCS_PER_MONTH = "300"
+FREE_BANK_ROWS_PER_MONTH = "5000"
+MAX_HEAVY_INFLIGHT = "8"
 INGEST_EMAIL_ADDRESS = "noreply@marginpulse.example.com"
 WHATSAPP_API_VERSION = "v19.0"
 AI_INSIGHTS_DAILY_BUDGET_USD = "5.00"

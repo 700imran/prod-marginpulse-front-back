@@ -20,6 +20,18 @@ export const safeLabel = (v: unknown, fallback = "other"): string => (typeof v =
 interface Counter { name: string; attrs: Attrs; value: number }
 interface Hist { name: string; unit: string; bounds: number[]; attrs: Attrs; count: number; sum: number; buckets: number[] }
 
+// Labels Prometheus reserves (target labels `job`/`instance`, histogram `le`, summary `quantile`, internal `__*`). The collector's
+// Prometheus exporter rejects the WHOLE metric when a datapoint attribute collides with one ("duplicate label names in constant and
+// variable labels"), silently losing it — so they are renamed at the source instead of trusting every caller to remember.
+const RESERVED_LABELS = new Set(["job", "instance", "le", "quantile"]);
+export const sanitizeAttrs = (a: Attrs): Attrs => {
+  let out: Attrs | undefined;
+  for (const k of Object.keys(a)) {
+    if (RESERVED_LABELS.has(k) || k.startsWith("__")) { out ??= { ...a }; delete out[k]; out[`${k.replace(/^_+/, "")}_attr`] = a[k]!; }
+  }
+  return out ?? a;
+};
+
 const attrKey = (name: string, a: Attrs) => name + "|" + Object.keys(a).sort().map((k) => `${k}=${a[k]}`).join(",");
 
 export class Registry {
@@ -33,10 +45,11 @@ export class Registry {
   counters = new Map<string, Counter>();
   hists = new Map<string, Hist>();
   spans: Span[] = [];
-  lastFlush = Date.now();
+  lastFlush = 0; // a fresh isolate exports as soon as it has something to say
   dirty = 0;
 
   inc(name: string, attrs: Attrs = {}, by = 1): void {
+    attrs = sanitizeAttrs(attrs);
     const k = attrKey(name, attrs);
     const c = this.counters.get(k);
     if (c) c.value += by; else this.counters.set(k, { name, attrs, value: by });
@@ -46,6 +59,7 @@ export class Registry {
 
   observe(name: string, unit: "s" | "ms", value: number, attrs: Attrs = {}): void {
     if (!Number.isFinite(value) || value < 0) return;
+    attrs = sanitizeAttrs(attrs);
     const bounds = unit === "s" ? BOUNDS_SECONDS : BOUNDS_MS;
     const k = attrKey(name, attrs);
     let h = this.hists.get(k);
@@ -115,29 +129,57 @@ export interface ExportEnv { OTLP_ENDPOINT?: string; OTLP_HEADERS?: string; ENVI
 
 const MIN_FLUSH_MS = 10_000;
 const MIN_EVENTS = 100;
+const MAX_BACKOFF_MS = 5 * 60_000;
+const MAX_SPANS = 200;
 let flushing = false;
+let failures = 0;          // consecutive failed exports
+let nextAttemptAt = 0;     // don't hammer a dead collector: exponential backoff 10 s, 20 s, 40 s … capped at 5 min
+export const resetFlushStateForTests = () => { flushing = false; failures = 0; nextAttemptAt = 0; };
 
-/** Fire-and-forget; never throws, never blocks a response. Call inside ctx.waitUntil. */
+/**
+ * Fire-and-forget; never throws, never blocks a response. Call inside ctx.waitUntil.
+ * Counters/histograms are CUMULATIVE, so a failed export loses nothing — the next successful one carries the totals.
+ * Spans are not cumulative, so on failure they are put back (bounded) and re-sent with the next attempt.
+ */
 export async function maybeFlush(reg: Registry, env: ExportEnv, force = false): Promise<void> {
   const endpoint = env.OTLP_ENDPOINT?.replace(/\/+$/, "");
   if (!endpoint || flushing) return;
-  const due = Date.now() - reg.lastFlush >= MIN_FLUSH_MS || reg.dirty >= MIN_EVENTS;
-  if (!force && !(due && (reg.dirty > 0 || reg.spans.length > 0))) return;
+  const now = Date.now();
+  if (!force) {
+    if (now < nextAttemptAt) return;
+    const due = now - reg.lastFlush >= MIN_FLUSH_MS || reg.dirty >= MIN_EVENTS;
+    if (!(due && (reg.dirty > 0 || reg.spans.length > 0))) return;
+  }
   flushing = true;
   const spans = reg.spans.splice(0, reg.spans.length);
-  reg.lastFlush = Date.now();
+  reg.lastFlush = now;
   reg.dirty = 0;
   const headers = { "Content-Type": "application/json", ...parseHeaders(env.OTLP_HEADERS) };
   const environment = env.ENVIRONMENT ?? "production";
+  let metricsOk = false, tracesOk = true;
   try {
     const sends = [fetch(`${endpoint}/v1/metrics`, { method: "POST", headers, body: JSON.stringify(buildMetricsPayload(reg, environment)), signal: AbortSignal.timeout(4000) })];
     if (spans.length) sends.push(fetch(`${endpoint}/v1/traces`, { method: "POST", headers, body: JSON.stringify(buildTracesPayload(reg, environment, spans)), signal: AbortSignal.timeout(4000) }));
     const res = await Promise.allSettled(sends);
-    const failed = res.filter((r) => r.status === "rejected" || (r.status === "fulfilled" && !r.value.ok)).length;
-    if (failed) console.warn(JSON.stringify({ level: "warn", msg: "otlp_export_failed", failed }));
+    const good = (r: PromiseSettledResult<Response>) => r.status === "fulfilled" && r.value.ok;
+    metricsOk = good(res[0]!);
+    if (spans.length) tracesOk = good(res[1]!);
   } catch (e) {
     console.warn(JSON.stringify({ level: "warn", msg: "otlp_export_error", error: (e as Error).message }));
   } finally {
+    if (!tracesOk) { reg.spans.unshift(...spans); if (reg.spans.length > MAX_SPANS) reg.spans.splice(0, reg.spans.length - MAX_SPANS); } // keep the newest
+    if (metricsOk && tracesOk) { failures = 0; nextAttemptAt = 0; }
+    else {
+      failures++; nextAttemptAt = Date.now() + Math.min(MAX_BACKOFF_MS, 10_000 * 2 ** (failures - 1));
+      reg.dirty = Math.max(reg.dirty, 1); // something is still unsent
+      console.warn(JSON.stringify({ level: "warn", msg: "otlp_export_failed", metricsOk, tracesOk, consecutiveFailures: failures, retryInMs: nextAttemptAt - Date.now() }));
+    }
     flushing = false;
   }
+}
+
+/** End-of-invocation flush for queue/cron isolates (no HTTP middleware runs there). At most one forced export per 2 s, and it honours the failure backoff. */
+export function flushPending(reg: Registry, env: ExportEnv): Promise<void> {
+  const now = Date.now();
+  return maybeFlush(reg, env, (reg.dirty > 0 || reg.spans.length > 0) && now - reg.lastFlush >= 2000 && now >= nextAttemptAt);
 }

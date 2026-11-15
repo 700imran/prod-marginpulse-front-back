@@ -25,7 +25,9 @@ export async function detectMissingInvoices(sql: Sql, tenantId: string): Promise
   if (vendorNames.length === 0) return { bankTransactionsScanned: 0, anomaliesCreated: 0 };
 
   const cutoff = new Date(Date.now() - OLDER_THAN_DAYS * 86_400_000).toISOString().slice(0, 10);
-  const txns = await listUnmatchedInDateRange(sql, tenantId, "0000-01-01", cutoff);
+  // "0001-01-01" is Go's zero time.Time (the original port's sentinel). "0000-01-01" is NOT a valid
+  // Postgres date (there is no year 0), so the old value made this query throw for every tenant with vendors.
+  const txns = await listUnmatchedInDateRange(sql, tenantId, "0001-01-01", cutoff);
 
   let anomaliesCreated = 0;
   for (const txn of txns) {

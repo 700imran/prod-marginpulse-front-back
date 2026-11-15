@@ -4,6 +4,7 @@
 // model (max_retries + dead_letter_queue in wrangler.toml) plays the
 // same role as SQS's ReportBatchItemFailures: a thrown error here means
 // "retry this message", same as returning an error did in Go.
+import { emit, registry } from "../observability/events";
 import type { Env } from "../config";
 import { getDb } from "../db";
 import { processDocument, type OCRResult } from "../pipelines/ocr";
@@ -12,6 +13,7 @@ import { fetchGSTR2B, parseGSTR2BSuppliers, crossVerifyVendors, type InternalVen
 import { verifyGSTIN, verifyPAN, verifyBankAccount } from "../pipelines/identity";
 import { getDocumentById, updateDocumentFields, findDuplicateDocument, listInvoicesWithTaxIdentifier } from "../repository/documents";
 import { listUnmatchedInDateRange, markTransactionMatched } from "../repository/bankTransactions";
+import { detectMissingInvoices } from "../pipelines/missingInvoice";
 import { createAnomaly } from "../repository/anomalies";
 import { appendAuditLog } from "../repository/auditLog";
 import { getTaxIdentifierById, updateTaxIdentifierVerification } from "../repository/taxIdentifiers";
@@ -237,7 +239,21 @@ async function reconcileTenantTask(env: Env, args: Record<string, any>): Promise
   }
 }
 
+// Daily missing-invoice detection for ONE tenant (fanned out by the cron trigger, so 5 lakh tenants are not swept in a single
+// invocation). Idempotent: an anomaly already open for a transaction is never duplicated.
+async function detectMissingInvoicesTask(env: Env, args: Record<string, any>): Promise<void> {
+  const tenantId = argStr(args, "tenant_id");
+  const sql = getDb(env);
+  try {
+    const r = await detectMissingInvoices(sql, tenantId);
+    if (r.anomaliesCreated > 0) console.log("scheduled_missing_invoice_sweep", { tenantId, ...r });
+  } finally {
+    await sql.end();
+  }
+}
+
 export const TASK_REGISTRY: Record<string, (env: Env, args: Record<string, any>) => Promise<void>> = {
+  detect_missing_invoices: detectMissingInvoicesTask,
   run_ocr_pipeline: runOCRPipeline,
   run_reconciliation: (env, args) => runReconciliation(env, null, args),
   reconcile_tenant: reconcileTenantTask,
@@ -253,11 +269,23 @@ export const TASK_REGISTRY: Record<string, (env: Env, args: Record<string, any>)
 const MAX_TRANSIENT_ATTEMPTS = 6;
 const backoff = (attempts: number) => Math.min(900, 10 * 2 ** Math.min(Math.max(attempts - 1, 0), 6));
 
+// Metrics for every outcome: without these, retries, failures and give-ups existed only as log lines and Grafana was blind to them.
 async function handleOne(message: Message<TaskMessage>): Promise<void> {
+  const task = TASK_REGISTRY[message.body?.task] ? message.body.task : "unknown";
+  const t0 = Date.now();
+  const done = (outcome: "ok" | "retry" | "gave_up" | "unknown", extra: Record<string, string> = {}) => {
+    emit("queue_task", { task, outcome, ...extra });
+    if (outcome !== "unknown") registry.observe("marginpulse.queue.task.duration", "s", (Date.now() - t0) / 1000, { task, outcome });
+  };
+  await runOne(message, done);
+}
+
+async function runOne(message: Message<TaskMessage>, done: (o: "ok" | "retry" | "gave_up" | "unknown", extra?: Record<string, string>) => void): Promise<void> {
   const msg = message.body;
   const taskFn = TASK_REGISTRY[msg.task];
   if (!taskFn) {
     console.error("unknown_task", { task: msg.task, jobId: msg.job_id });
+    done("unknown");
     message.ack(); // unknown task type — don't retry forever, drop it
     return;
   }
@@ -266,6 +294,7 @@ async function handleOne(message: Message<TaskMessage>): Promise<void> {
   try {
     await taskFn(currentEnv!, msg.args);
     console.log("task_completed", { task: msg.task, jobId: msg.job_id });
+    done("ok");
     message.ack();
   } catch (e) {
     const transient = e instanceof TransientTaskError;
@@ -273,10 +302,12 @@ async function handleOne(message: Message<TaskMessage>): Promise<void> {
       // The provider stayed down for the whole retry budget. The record stays PENDING (never marked FAILED) so the
       // user can re-verify later; acking stops the infinite loop.
       console.error("task_gave_up", { task: msg.task, jobId: msg.job_id, attempts, error: (e as Error).message });
+      done("gave_up");
       message.ack();
       return;
     }
     console.error("task_failed", { task: msg.task, jobId: msg.job_id, attempts, transient, error: (e as Error).message });
+    done("retry", { transient: String(transient) });
     message.retry({ delaySeconds: backoff(attempts) });
   }
 }
