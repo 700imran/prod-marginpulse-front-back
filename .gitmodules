@@ -1,0 +1,4 @@
+[submodule "extensions/erpnext"]
+	path = extensions/erpnext
+	url = https://github.com/frappe/erpnext.git
+	branch = version-16
