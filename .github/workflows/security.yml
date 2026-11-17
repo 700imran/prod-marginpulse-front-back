@@ -27,7 +27,7 @@ jobs:
       TEST_DATABASE_URL: postgres://postgres:pg@127.0.0.1:5432/mp
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: 20 }
       - run: npm ci
       - name: Load schema (Supabase auth stub, then the real schema)
@@ -45,7 +45,7 @@ jobs:
     defaults: { run: { working-directory: frontend } }
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: 20 }
       - run: npm ci
       - name: Frontend tests (refresh speed, identity header)
@@ -61,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: 20 }
       - name: Prometheus rules + alert unit tests (promtool)
         run: |
