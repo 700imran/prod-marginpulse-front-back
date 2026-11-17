@@ -8,13 +8,13 @@ import { emit, registry } from "../observability/events";
 import type { Env } from "../config";
 import { getDb } from "../db";
 import { processDocument, type OCRResult } from "../pipelines/ocr";
-import { reconcileBatch, type Invoice, type BankRow } from "../pipelines/reconciliation";
+import { reconcileBatch, type Invoice, type BankRow, type MatchResult } from "../pipelines/reconciliation";
 import { fetchGSTR2B, parseGSTR2BSuppliers, crossVerifyVendors, type InternalVendor } from "../pipelines/gstsync";
 import { verifyGSTIN, verifyPAN, verifyBankAccount } from "../pipelines/identity";
-import { getDocumentById, updateDocumentFields, findDuplicateDocument, listInvoicesWithTaxIdentifier } from "../repository/documents";
-import { listUnmatchedInDateRange, markTransactionMatched } from "../repository/bankTransactions";
+import { getDocumentById, updateDocumentFields, findDuplicateDocument, listInvoicesWithTaxIdentifier, setGstPortalStatuses } from "../repository/documents";
+import { listReconciliationCandidates, claimTransactionForDocument } from "../repository/bankTransactions";
 import { detectMissingInvoices } from "../pipelines/missingInvoice";
-import { createAnomaly } from "../repository/anomalies";
+import { createAnomalyOnce } from "../repository/anomalies";
 import { appendAuditLog } from "../repository/auditLog";
 import { getTaxIdentifierById, updateTaxIdentifierVerification } from "../repository/taxIdentifiers";
 import { getBankAccountById, updateBankAccountVerification } from "../repository/bankAccounts";
@@ -90,12 +90,13 @@ async function checkForDuplicateInvoice(sql: ReturnType<typeof getDb>, tenantId:
 
     await updateDocumentFields(sql, tenantId, documentId, { duplicateOfDocumentId: dup.documentId });
     const description = `Looks like a duplicate of document ${dup.documentId} — same vendor (${vendorName}) and matching invoice number or amount+date`;
-    await createAnomaly(sql, {
+    // Queue redelivery re-runs this whole task: record the alert and its audit entry only the first time.
+    const created = await createAnomalyOnce(sql, {
       tenantId, documentId, anomalyType: "DUPLICATE_INVOICE", severity: "HIGH", description,
       suggestedAction: "Confirm this isn't a re-upload or a genuine duplicate vendor bill before including it in ITC claims",
     });
-    await appendAuditLog(sql, { tenantId, entityType: "DOCUMENT", entityId: documentId, action: "DUPLICATE_DETECTED", reason: description, actorEmail: "system@marginpulse" });
-    console.log("duplicate_invoice_detected", { documentId, duplicateOf: dup.documentId });
+    if (created) await appendAuditLog(sql, { tenantId, entityType: "DOCUMENT", entityId: documentId, action: "DUPLICATE_DETECTED", reason: description, actorEmail: "system@marginpulse" });
+    console.log("duplicate_invoice_detected", { documentId, duplicateOf: dup.documentId, alreadyRecorded: !created });
   } catch (e) {
     console.error("duplicate_invoice_check_failed", { documentId, error: (e as Error).message });
   }
@@ -117,12 +118,23 @@ export async function runReconciliation(env: Env, sqlIn: ReturnType<typeof getDb
     const docDate = new Date(`${doc.documentDate}T00:00:00Z`);
     const startDate = new Date(docDate.getTime() - 7 * 86_400_000).toISOString().slice(0, 10);
     const endDate = new Date(docDate.getTime() + 45 * 86_400_000).toISOString().slice(0, 10);
-    const candidates = await listUnmatchedInDateRange(sql, tenantId, startDate, endDate);
 
     const invoice: Invoice = { documentId: doc.documentId, invoiceNumber: doc.invoiceNumber ?? undefined, vendorName: doc.vendorName ?? "", rawTotalAmount: parseFloat(doc.rawTotalAmount), documentDate: doc.documentDate };
-    const bankRows: BankRow[] = candidates.map((c) => ({ transactionId: c.transactionId, narration: c.narration ?? "", debitAmount: parseFloat(c.debitAmount), transactionDate: c.transactionDate }));
 
-    const [result] = reconcileBatch([invoice], bankRows);
+    // Pick the best bank row, then CLAIM it atomically BEFORE recording the match. Several documents of one tenant are reconciled
+    // at the same time (parallel uploads / queue consumers) and can all see the same unmatched row; exactly one claim wins and the
+    // others look again (the row is no longer a candidate) instead of also being marked RECONCILED against it.
+    let result: MatchResult | undefined;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const candidates = await listReconciliationCandidates(sql, tenantId, startDate, endDate, documentId);
+      const bankRows: BankRow[] = candidates.map((c) => ({ transactionId: c.transactionId, narration: c.narration ?? "", debitAmount: parseFloat(c.debitAmount), transactionDate: c.transactionDate }));
+      [result] = reconcileBatch([invoice], bankRows);
+      if (!result?.matchedBankTransactionId) break; // unmatched / needs review: nothing to claim
+      if (await claimTransactionForDocument(sql, tenantId, result.matchedBankTransactionId, documentId, result.score)) break;
+      emit("reconcile_claim_conflict", { attempt: String(attempt) });
+      result = undefined; // another document took that row a moment ago — look again without it
+    }
+    if (!result) [result] = reconcileBatch([invoice], []); // still contended after 3 looks: report "unmatched" (a re-run will retry) rather than a false match
     if (!result) return;
 
     const docStatus = result.status === "RECONCILED" ? "RECONCILED" : "PARSED";
@@ -133,20 +145,15 @@ export async function runReconciliation(env: Env, sqlIn: ReturnType<typeof getDb
       reconciliationReason: result.reason,
     });
 
-    // RECONCILED needs no human attention. MANUAL_REVIEW and UNMATCHED
-    // both get an anomaly so they surface on the dashboard with the
-    // specific reason attached.
+    // RECONCILED needs no human attention. MANUAL_REVIEW and UNMATCHED both get an alert so they surface on the dashboard with
+    // the specific reason attached — once: a redelivered task must not add another copy while the first is still open.
     if (result.status === "MANUAL_REVIEW" || result.status === "UNMATCHED") {
-      await createAnomaly(sql, {
+      await createAnomalyOnce(sql, {
         tenantId, documentId, anomalyType: `RECONCILIATION_${result.status}`,
         severity: result.status === "UNMATCHED" ? "LOW" : "MEDIUM",
         description: result.reason,
         suggestedAction: "Review the candidate match and either confirm it manually or upload the missing bank statement",
       });
-    }
-
-    if (result.matchedBankTransactionId) {
-      await markTransactionMatched(sql, tenantId, result.matchedBankTransactionId, documentId, result.score);
     }
     console.log("reconciliation_completed", { documentId, status: result.status, score: result.score });
   } finally {
@@ -170,13 +177,11 @@ async function syncGSTPortal(env: Env, args: Record<string, any>): Promise<void>
       rawTotalAmount: parseFloat(inv.rawTotalAmount ?? "0"), invoiceNumber: inv.invoiceNumber ?? "",
     }));
     const results = crossVerifyVendors(internalVendors, portalSuppliers);
-    for (const r of results) {
-      try {
-        await updateDocumentFields(sql, tenantId, r.documentId, { gstPortalStatus: r.gstPortalStatus });
-      } catch (e) {
-        console.error("gst_sync_document_update_failed", { documentId: r.documentId, error: (e as Error).message });
-      }
-    }
+    // Group by resulting status → at most four UPDATEs for the whole tenant (was one per invoice). A failure throws, so the
+    // queue retries the message; the write is idempotent (same statuses again), so retries are safe.
+    const byStatus = new Map<string, string[]>();
+    for (const r of results) { const ids = byStatus.get(r.gstPortalStatus); if (ids) ids.push(r.documentId); else byStatus.set(r.gstPortalStatus, [r.documentId]); }
+    await setGstPortalStatuses(sql, tenantId, byStatus);
     console.log("gst_sync_completed", { tenantId, vendorsChecked: internalVendors.length });
   } finally {
     await sql.end();

@@ -205,6 +205,17 @@ create table if not exists public.audit_log (
 create index if not exists idx_audit_tenant_entity on public.audit_log (tenant_id, entity_type, entity_id, created_at desc);
 
 -- ============================================================================
+-- Scale indexes (also available standalone as db/005_scale_indexes.sql; see the comments and measurements there)
+-- ============================================================================
+create index if not exists idx_documents_duplicate_of   on public.documents         (duplicate_of_document_id)    where duplicate_of_document_id    is not null;
+create index if not exists idx_documents_matched_tx     on public.documents         (matched_bank_transaction_id) where matched_bank_transaction_id is not null;
+create index if not exists idx_banktx_matched_document  on public.bank_transactions (matched_document_id)        where matched_document_id         is not null;
+create index if not exists idx_anomalies_document       on public.anomalies         (document_id)                 where document_id                 is not null;
+create index if not exists idx_anomalies_related_tx     on public.anomalies         (related_transaction_id)      where related_transaction_id      is not null;
+create index if not exists idx_documents_tenant_vendor_invoice on public.documents (tenant_id, vendor_name, invoice_number);
+create index if not exists idx_banktx_tenant_created on public.bank_transactions (tenant_id, created_at);
+
+-- ============================================================================
 -- settings — one row per tenant per category (was 3 item-types in Dynamo)
 -- ============================================================================
 create table if not exists public.reconciliation_settings (

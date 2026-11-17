@@ -31,6 +31,24 @@ export async function createAnomaly(
   return rows[0]!;
 }
 
+// At-least-once safe variant for queue tasks: records the alert only when the document has no OPEN alert of the same type
+// yet, and returns null when it already existed. A redelivered task (or a re-run of reconciliation) therefore never piles up
+// copies of the same alert. Not a hard uniqueness guarantee — two truly simultaneous calls can both insert — which is
+// acceptable for an informational alert and avoids a unique index that existing production duplicates would block.
+export async function createAnomalyOnce(
+  sql: Sql,
+  input: { tenantId: string; documentId: string; anomalyType: string; severity: string; description: string; suggestedAction?: string },
+): Promise<AnomalyRow | null> {
+  const rows = await sql.unsafe<AnomalyRow[]>(
+    `insert into anomalies (tenant_id, document_id, anomaly_type, severity, description, suggested_action)
+     select $1::uuid, $2::uuid, $3::text, $4::text, $5::text, $6::text
+     where not exists (select 1 from anomalies where tenant_id = $1::uuid and document_id = $2::uuid and anomaly_type = $3::text and status = 'OPEN')
+     returning ${SELECT}`,
+    [input.tenantId, input.documentId, input.anomalyType, input.severity, input.description, input.suggestedAction ?? null],
+  );
+  return rows[0] ?? null;
+}
+
 export async function listAnomalies(sql: Sql, tenantId: string, status: string | undefined, limit: number, offset: number): Promise<AnomalyRow[]> {
   if (status) {
     return sql.unsafe<AnomalyRow[]>(`select ${SELECT} from anomalies where tenant_id = $1 and status = $2 order by created_at desc limit $3 offset $4`, [tenantId, status, limit, offset]);

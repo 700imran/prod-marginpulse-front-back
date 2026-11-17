@@ -4,6 +4,8 @@ Short answer: **the code now degrades gracefully; the platform plans you are on 
 excess work quickly, bound per-user storage and tell clients when to come back. It cannot create database connections,
 Auth quota or Worker requests that your Cloudflare/Supabase plans do not include.
 
+See also [`SCALABILITY_CHECKLIST.md`](SCALABILITY_CHECKLIST.md) — indexes, N+1, caching (incl. the Hyperdrive stale-read warning), idempotency, backups and monitoring, checked with measurements.
+
 ## What a user actually costs (the shape of the traffic)
 
 * **Sign-in does not touch our Worker.** The browser signs in against Supabase Auth directly (`supabase.auth.signInWithPassword`). A

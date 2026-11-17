@@ -259,3 +259,18 @@ export async function listExistingInvoiceKeys(sql: Sql, tenantId: string, fromDa
 export async function listByStatus(sql: Sql, tenantId: string, status: string): Promise<DocumentRow[]> {
   return sql.unsafe<DocumentRow[]>(`select ${SELECT} from documents where tenant_id = $1 and processing_status = $2`, [tenantId, status]);
 }
+
+// GST portal cross-verification result write-back. One UPDATE per distinct status (at most four) instead of one per document:
+// a tenant with 30,000 invoices used to cost 30,000 sequential round trips through the pool. `ids` is chunked because
+// Postgres allows at most 65,534 bind parameters per statement. Scoped by tenant_id, so a bad id can never touch another tenant.
+export async function setGstPortalStatuses(sql: Sql, tenantId: string, byStatus: Map<string, string[]>, chunk = 5000): Promise<number> {
+  let updated = 0;
+  for (const [status, ids] of byStatus) {
+    for (let i = 0; i < ids.length; i += chunk) {
+      const part = ids.slice(i, i + chunk);
+      const res = await sql`update documents set gst_portal_status = ${status}, updated_at = now() where tenant_id = ${tenantId} and document_id in ${sql(part)}`;
+      updated += res.count;
+    }
+  }
+  return updated;
+}
