@@ -192,28 +192,38 @@ const GENERIC = new Set(["traders", "trading", "enterprises", "enterprise", "wor
 
 // Share of the vendor's (weighted) tokens that appear in the bank narration — exactly, with a small typo /
 // truncation, or run together as UPI/IMPS payees often are ("VIKRAMTEXTILES"). Containment, not whole-string distance.
-export function vendorSimilarity(vendor: string, narration: string): number {
-  const vt = tokens(vendor);
-  const nt = tokens(narration);
+export interface VendorPre { vt: string[]; vendorCompact: string }
+export interface NarrationPre { nt: string[]; compact: string }
+export const preVendor = (vendor: string): VendorPre => { const vt = tokens(vendor); return { vt, vendorCompact: vt.join("") }; };
+export const preNarration = (narration: string): NarrationPre => ({ nt: tokens(narration), compact: narration.toLowerCase().replace(/[^a-z0-9]+/g, "") });
+
+/** vendorSimilarity on strings that were tokenised once. The engine compares every candidate pair, so tokenising per pair (two regex passes + a split each) was most of its time. */
+export function vendorSimilarityPre(v: VendorPre, n: NarrationPre): number {
+  const { vt, vendorCompact } = v, { nt, compact } = n;
   if (vt.length === 0 || nt.length === 0) return 0;
-  const compact = narration.toLowerCase().replace(/[^a-z0-9]+/g, "");
-  const vendorCompact = vt.join("");
   if (vendorCompact.length >= 6 && compact.includes(vendorCompact)) return 1;
   let hit = 0, total = 0;
-  for (const v of vt) {
-    const w = GENERIC.has(v) ? 0.4 : 1;
+  for (const t of vt) {
+    const w = GENERIC.has(t) ? 0.4 : 1;
     total += w;
     let best = 0;
-    for (const n of nt) {
-      if (n === v) { best = 1; break; }
-      if (v.length >= 4 && (n.startsWith(v) || v.startsWith(n)) && Math.min(n.length, v.length) >= 4) best = Math.max(best, 0.9);
-      else best = Math.max(best, levenshteinRatio(v, n) >= 0.8 ? 0.8 : 0);
+    for (const x of nt) {
+      if (x === t) { best = 1; break; }
+      if (t.length >= 4 && (x.startsWith(t) || t.startsWith(x)) && Math.min(x.length, t.length) >= 4) best = Math.max(best, 0.9);
+      else best = Math.max(best, levenshteinRatio(t, x) >= 0.8 ? 0.8 : 0);
     }
-    if (best === 0 && v.length >= 4 && compact.includes(v)) best = 0.9;
+    if (best === 0 && t.length >= 4 && compact.includes(t)) best = 0.9;
     hit += best * w;
   }
   return hit / total;
 }
+
+export function vendorSimilarity(vendor: string, narration: string): number {
+  return vendorSimilarityPre(preVendor(vendor), preNarration(narration));
+}
+
+/** Normalised invoice number for narration matching ("" = too short to be evidence). */
+const refKey = (invoiceNumber: string | undefined): string => { if (!invoiceNumber) return ""; const k = invoiceNumber.toLowerCase().replace(/[^a-z0-9]/g, ""); return k.length < 3 ? "" : k; };
 
 function referenceHit(invoiceNumber: string | undefined, narration: string): boolean {
   if (!invoiceNumber) return false;
@@ -243,7 +253,7 @@ function amountTier(inv: number, bank: number, o: EngineOptions): Tier | null {
   return null;
 }
 
-export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresholds: ReconcileThresholds = DEFAULT_THRESHOLDS, opts: EngineOptions = DEFAULT_ENGINE): MatchResult[] {
+export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresholds: ReconcileThresholds = DEFAULT_THRESHOLDS, opts: EngineOptions = DEFAULT_ENGINE, stats?: { candidates: number }): MatchResult[] {
   const cands: Candidate[] = [];
   const perInv: Candidate[][] = invoices.map(() => []);
   const perBank = new Map<number, Candidate[]>();
@@ -254,6 +264,9 @@ export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresho
   const order = bankRows.map((_, j) => j).filter((j) => bankRows[j]!.debitAmount > 0 && !Number.isNaN(bankMs[j]!)).sort((a, b) => bankRows[a]!.debitAmount - bankRows[b]!.debitAmount);
   const lowerBound = (v: number) => { let lo = 0, hi = order.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (bankRows[order[mid]!]!.debitAmount < v) lo = mid + 1; else hi = mid; } return lo; };
   const maxTds = Math.max(0, ...opts.tdsRates);
+  // Tokenise each vendor / narration once, lazily (only rows that reach a candidate pair), instead of once per pair.
+  const vpre: (VendorPre | undefined)[] = new Array(invoices.length), npre: (NarrationPre | undefined)[] = new Array(bankRows.length);
+  const refK = invoices.map((x) => refKey(x.invoiceNumber));
 
   invoices.forEach((inv, i) => {
     if (!inv.documentDate || !(inv.rawTotalAmount > 0)) return;
@@ -269,8 +282,9 @@ export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresho
       if (signed < -opts.daysBefore || signed > opts.daysAfter) continue;
       const tier = amountTier(inv.rawTotalAmount, b.debitAmount, opts);
       if (!tier) continue; // HARD amount gate — wrong amount can never match
-      const vendor = vendorSimilarity(inv.vendorName, b.narration);
-      const ref = referenceHit(inv.invoiceNumber, b.narration);
+      const vp = (vpre[i] ??= preVendor(inv.vendorName)), np = (npre[j] ??= preNarration(b.narration));
+      const vendor = vendorSimilarityPre(vp, np);
+      const ref = refK[i] !== "" && np.compact.includes(refK[i]!);
       const dateScore = Math.exp(-0.03 * Math.abs(signed));
       // Prefer the candidate whose amount is closest: two same-vendor payments a few rupees apart must not be decided by which one is nearer in date.
       const exactness = 1 - Math.min(1, Math.abs(inv.rawTotalAmount - b.debitAmount) / Math.max(opts.amountToleranceAbs, 1e-9));
@@ -282,6 +296,8 @@ export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresho
       (perBank.get(j) ?? perBank.set(j, []).get(j)!).push(c);
     }
   });
+
+  if (stats) stats.candidates = cands.length;
 
   // One-to-one: strongest pairs claim their bank row first.
   cands.sort((a, b) => b.score - a.score || a.days - b.days);
@@ -325,4 +341,166 @@ export function reconcileBatch(invoices: Invoice[], bankRows: BankRow[], thresho
     const why = c.tier === "NET_OF_TDS" ? "amount equals invoice net of a standard TDS rate" : c.tier === "NEAR" ? "amount differs slightly (bank charges / rounding?)" : rivals > 0 ? "more than one equally good candidate" : !identity ? "amount matches but vendor/reference does not" : "confidence below auto-approve";
     return { documentId: inv.documentId, matchedBankTransactionId: null, candidateBankTransactionId: bank.transactionId, score: c.score, status: "MANUAL_REVIEW", reason: `Best candidate "${bank.narration}" scored ${pct} — needs a human check: ${why}` };
   });
+}
+
+// ───────────────────────── scale guard ─────────────────────────
+// The engine builds one Candidate object for every (invoice, bank row) pair that passes the amount and date gates. That is tiny for
+// ordinary data, but it grows with the SQUARE of how many invoices share an amount (rent, retainers, round-number bills): measured on
+// a laptop, 5,000 identical-amount invoices produced ~12 M candidates, 44 s and ~470 MB — far past a Worker's 128 MB. The functions
+// below keep every run inside a fixed budget, and change nothing at all for data that is under it.
+
+interface BankIndex { bankMs: number[]; order: number[]; lowerBound: (v: number) => number }
+function buildBankIndex(bankRows: BankRow[]): BankIndex {
+  const bankMs = bankRows.map((b) => (b.transactionDate ? Date.parse(b.transactionDate + "T00:00:00Z") : NaN));
+  const order = bankRows.map((_, j) => j).filter((j) => bankRows[j]!.debitAmount > 0 && !Number.isNaN(bankMs[j]!)).sort((a, b) => bankRows[a]!.debitAmount - bankRows[b]!.debitAmount);
+  const lowerBound = (v: number) => { let lo = 0, hi = order.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (bankRows[order[mid]!]!.debitAmount < v) lo = mid + 1; else hi = mid; } return lo; };
+  return { bankMs, order, lowerBound };
+}
+
+/** Candidate pairs one invoice has (same gates as reconcileBatch), counted without allocating them; stops once past `limit`. */
+function pairsForInvoice(inv: Invoice, bankRows: BankRow[], ix: BankIndex, limit: number, opts: EngineOptions, maxTds: number): number {
+  if (!inv.documentDate || !(inv.rawTotalAmount > 0)) return 0;
+  const invMs = Date.parse(inv.documentDate + "T00:00:00Z");
+  if (Number.isNaN(invMs)) return 0;
+  const loAmt = inv.rawTotalAmount * (1 - maxTds - 0.005) - 1;
+  const hiAmt = inv.rawTotalAmount * 1.005 + 1;
+  let n = 0;
+  for (let k = ix.lowerBound(loAmt); k < ix.order.length; k++) {
+    const j = ix.order[k]!, b = bankRows[j]!;
+    if (b.debitAmount > hiAmt) break;
+    const signed = (ix.bankMs[j]! - invMs) / 86_400_000;
+    if (signed < -opts.daysBefore || signed > opts.daysAfter) continue;
+    if (!amountTier(inv.rawTotalAmount, b.debitAmount, opts)) continue;
+    if (++n > limit) return n;
+  }
+  return n;
+}
+
+/** Number of candidate pairs reconcileBatch would build, counted without allocating them, stopping once past `limit`. */
+export function countCandidatePairs(invoices: Invoice[], bankRows: BankRow[], limit = Infinity, opts: EngineOptions = DEFAULT_ENGINE): number {
+  const ix = buildBankIndex(bankRows), maxTds = Math.max(0, ...opts.tdsRates);
+  let n = 0;
+  for (const inv of invoices) { n += pairsForInvoice(inv, bankRows, ix, limit - n, opts, maxTds); if (n > limit) return n; }
+  return n;
+}
+
+const UNMATCHED_REASON = "No bank debit with a matching amount inside the payment window (or it was claimed by a stronger match)";
+// Memory: one candidate is ~90 bytes once the per-invoice / per-bank indexes are counted, and a Worker has 128 MB for everything, so one pass
+// holds at most 400 k of them (measured: 1.5 M exhausts a 128 MB heap, 500 k fits). CPU: the engine costs roughly 0.6 µs per pair, so 20 M pairs
+// in total is ~12 s of a Worker's 30 s; invoices beyond that are reported as FAILED with a reason instead of being attempted.
+export const DEFAULT_MAX_PAIRS = 400_000;
+export const DEFAULT_MAX_TOTAL_PAIRS = 20_000_000;
+const TOO_DENSE_REASON = "Too many look-alike invoices (same amount, same period) to match in one run — match these manually, or upload the invoices and bank statement in smaller date ranges";
+const SLICE_RIVAL_WORK_CAP = 1_000_000; // outsider comparisons allowed per run when checking for cross-slice rivals; beyond it, play safe
+
+/**
+ * reconcileBatch with a bounded working set.
+ *
+ * Within `maxPairs` candidate pairs this IS reconcileBatch — identical output. Above that, invoices are cut into date-ordered slices
+ * that each stay inside the budget, every slice is matched against ALL the bank rows, and the slices are then reconciled with each
+ * other under one rule: **a slice may only auto-approve what a whole-run pass would also have auto-approved.** An auto-match is kept
+ * when its narration carries the invoice number (decisive evidence), or when no invoice from another slice is an equally good
+ * claimant for that bank row (same amount tier, vendor evidence within the engine's rival band). Anything contested becomes a
+ * MANUAL_REVIEW suggestion instead — never a silent guess. One bank row is auto-matched to at most one invoice; review suggestions
+ * that point at a row someone else now owns are re-run against the free rows. The result is never more eager than the single pass,
+ * and for data without cross-slice competition it is the same.
+ */
+export function reconcileBatchBudgeted(invoices: Invoice[], bankRows: BankRow[], opts: { maxPairs?: number; maxTotalPairs?: number; onSliced?: (slices: number) => void; onCapped?: (skipped: number) => void } = {}): MatchResult[] {
+  const maxPairs = opts.maxPairs ?? DEFAULT_MAX_PAIRS, maxTotalPairs = opts.maxTotalPairs ?? DEFAULT_MAX_TOTAL_PAIRS;
+  if (countCandidatePairs(invoices, bankRows, maxPairs) <= maxPairs) return reconcileBatch(invoices, bankRows);
+
+  const ix = buildBankIndex(bankRows), maxTds = Math.max(0, ...DEFAULT_ENGINE.tdsRates);
+  const idx = invoices.map((_, i) => i).sort((a, b) => (invoices[a]!.documentDate || "￿").localeCompare(invoices[b]!.documentDate || "￿") || a - b);
+  const slices: number[][] = [];
+  const skipped: number[] = [];
+  let cur: number[] = [], pairs = 0, total = 0;
+  for (const i of idx) {
+    const c = pairsForInvoice(invoices[i]!, bankRows, ix, maxPairs, DEFAULT_ENGINE, maxTds); // against the FULL bank list: a safe upper bound for the slice
+    if (skipped.length > 0 || total + c > maxTotalPairs) { skipped.push(i); continue; } // total CPU is bounded too: past the cap the rest is reported, not attempted
+    total += c;
+    if (cur.length > 0 && pairs + c > maxPairs) { slices.push(cur); cur = []; pairs = 0; }
+    cur.push(i); pairs += c;
+  }
+  if (cur.length) slices.push(cur);
+  opts.onSliced?.(slices.length);
+  if (skipped.length) opts.onCapped?.(skipped.length);
+
+  const out: MatchResult[] = new Array(invoices.length);
+  for (const i of skipped) out[i] = { documentId: invoices[i]!.documentId, matchedBankTransactionId: null, score: 0, status: "FAILED", reason: TOO_DENSE_REASON };
+  const sliceOf: number[] = new Array(invoices.length).fill(-1);
+  slices.forEach((slice, s) => {
+    const res = reconcileBatch(slice.map((i) => invoices[i]!), bankRows);
+    res.forEach((r, k) => { out[slice[k]!] = r; sliceOf[slice[k]!] = s; });
+  });
+  return settleSlices(invoices, bankRows, out, sliceOf, maxPairs, maxTotalPairs);
+}
+
+function settleSlices(invoices: Invoice[], bankRows: BankRow[], out: MatchResult[], sliceOf: number[], maxPairs: number, maxTotalPairs: number): MatchResult[] {
+  const E = DEFAULT_ENGINE;
+  const rowOf = new Map(bankRows.map((b, j) => [b.transactionId, j]));
+  const pct = (x: number) => `${(x * 100).toFixed(0)}%`;
+  const toReview = (i: number, why: string): MatchResult => {
+    const r = out[i]!, b = bankRows[rowOf.get(r.matchedBankTransactionId ?? r.candidateBankTransactionId!)!]!;
+    return { documentId: r.documentId, matchedBankTransactionId: null, candidateBankTransactionId: b.transactionId, score: r.score, status: "MANUAL_REVIEW", reason: `Best candidate "${b.narration}" scored ${pct(r.score)} — needs a human check: ${why}` };
+  };
+  const toUnmatched = (i: number): MatchResult => ({ documentId: out[i]!.documentId, matchedBankTransactionId: null, score: 0, status: "UNMATCHED", reason: UNMATCHED_REASON });
+
+  // Invoices that could be an equally good claimant for a bank row, found by amount.
+  const valid = invoices.map((_, i) => i).filter((i) => invoices[i]!.documentDate && invoices[i]!.rawTotalAmount > 0 && !Number.isNaN(Date.parse(invoices[i]!.documentDate + "T00:00:00Z"))).sort((a, b) => invoices[a]!.rawTotalAmount - invoices[b]!.rawTotalAmount);
+  const amounts = valid.map((i) => invoices[i]!.rawTotalAmount);
+  const lowerBoundAmt = (v: number) => { let lo = 0, hi = amounts.length; while (lo < hi) { const mid = (lo + hi) >> 1; if (amounts[mid]! < v) lo = mid + 1; else hi = mid; } return lo; };
+  let work = 0;
+  const hasOutsideRival = (i: number): boolean => {
+    const inv = invoices[i]!, b = bankRows[rowOf.get(out[i]!.matchedBankTransactionId!)!]!;
+    const bMs = Date.parse(b.transactionDate + "T00:00:00Z"), mine = vendorSimilarity(inv.vendorName, b.narration);
+    const lo = (b.debitAmount - E.amountToleranceAbs) / (1 + E.amountTolerancePct) - 1e-9, hi = (b.debitAmount + E.amountToleranceAbs) / Math.max(1e-9, 1 - E.amountTolerancePct) + 1e-9;
+    for (let p = lowerBoundAmt(lo); p < valid.length && amounts[p]! <= hi; p++) {
+      const k = valid[p]!;
+      if (sliceOf[k] === sliceOf[i]) continue;
+      if (++work > SLICE_RIVAL_WORK_CAP) return true; // out of budget: treat as contested (a review, never a wrong auto-match)
+      const other = invoices[k]!;
+      const signed = (bMs - Date.parse(other.documentDate + "T00:00:00Z")) / 86_400_000;
+      if (signed < -E.daysBefore || signed > E.daysAfter) continue;
+      if (amountTier(other.rawTotalAmount, b.debitAmount, E) !== "EXACT") continue;
+      if (Math.abs(vendorSimilarity(other.vendorName, b.narration) - mine) < 0.2) return true;
+    }
+    return false;
+  };
+
+  // 1. Keep an auto-match only if it is decisive or uncontested.
+  const kept: number[] = [];
+  for (let i = 0; i < out.length; i++) {
+    if (out[i]!.status !== "RECONCILED") continue;
+    const b = bankRows[rowOf.get(out[i]!.matchedBankTransactionId!)!]!;
+    if (referenceHit(invoices[i]!.invoiceNumber, b.narration) || !hasOutsideRival(i)) kept.push(i);
+    else out[i] = toReview(i, "more than one equally good candidate");
+  }
+  // 2. A bank row is auto-matched to one invoice only: the strongest claim wins.
+  const owner = new Map<string, number>();
+  const losers: number[] = [];
+  for (const i of kept.sort((a, b) => out[b]!.score - out[a]!.score || a - b)) {
+    const row = out[i]!.matchedBankTransactionId!;
+    if (owner.has(row)) losers.push(i); else owner.set(row, i);
+  }
+  // 3. Re-run what lost its row, and what only suggested a row somebody else now owns, against the rows still free.
+  const stale = [...losers];
+  for (let i = 0; i < out.length; i++) { const r = out[i]!; if (r.status === "MANUAL_REVIEW" && r.candidateBankTransactionId && owner.has(r.candidateBankTransactionId)) stale.push(i); }
+  if (stale.length) {
+    const free = bankRows.filter((b) => !owner.has(b.transactionId));
+    const again = reconcileBatchBudgeted(stale.map((i) => invoices[i]!), free, { maxPairs, maxTotalPairs }); // strictly fewer invoices than this run (the owners are not in it), so it terminates
+    again.forEach((r, k) => {
+      const i = stale[k]!;
+      out[i] = r;
+      if (r.status !== "RECONCILED") return;
+      const b = bankRows[rowOf.get(r.matchedBankTransactionId!)!]!;
+      if (referenceHit(invoices[i]!.invoiceNumber, b.narration) && !owner.has(b.transactionId)) owner.set(b.transactionId, i);
+      else out[i] = toReview(i, "more than one equally good candidate"); // repair pass stays conservative: only invoice-number evidence auto-approves
+    });
+  }
+  // 4. Last check: nobody suggests a row that someone else owns.
+  for (let i = 0; i < out.length; i++) {
+    const r = out[i]!;
+    if (r.status === "MANUAL_REVIEW" && r.candidateBankTransactionId && owner.has(r.candidateBankTransactionId) && owner.get(r.candidateBankTransactionId) !== i) out[i] = toUnmatched(i);
+  }
+  return out;
 }

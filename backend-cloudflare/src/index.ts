@@ -14,6 +14,7 @@ import { ValidationError } from "./security/validate";
 import { shedHeavy } from "./middleware/shed";
 import { isDbUnavailable, retryAfterSeconds } from "./lib/dbErrors";
 import { claimOnce } from "./ratelimit";
+import { isPaymentEvent, processPaymentWebhook } from "./billing/razorpayPlan";
 import { healthRoutes } from "./routes/health";
 import { authRoutes } from "./routes/auth";
 import { documentRoutes } from "./routes/documents";
@@ -101,7 +102,18 @@ app.post("/api/razorpay/webhook", async (c) => {
     return c.json({ error: "Invalid JSON" }, 400);
   }
 
-  // Replay / duplicate-delivery guard: process each Razorpay event id once.
+  // Payment events (order.paid / payment.captured) ACTIVATE THE PLAN. This is what still works when the customer closes the tab, loses
+  // network or is bounced through a UPI app and never returns to the page, so the browser's verify call never happened. They are
+  // idempotent in the database, so they are NOT de-duplicated by event id: if the first attempt failed and we answered 5xx, the
+  // redelivery (same event id) must be processed, not dropped as a "duplicate".
+  if (isPaymentEvent(event.event)) {
+    const r = await processPaymentWebhook(c.env, c.get("sql"), event);
+    emit("payment", { outcome: `webhook_${r.outcome}` });
+    console.log("razorpay:webhook_payment", { event: event.event, outcome: r.outcome });
+    return r.retry ? c.json({ status: "retry" }, 500) : c.json({ status: "ok", outcome: r.outcome }, 200);
+  }
+
+  // Replay / duplicate-delivery guard for the log-only events: process each Razorpay event id once.
   const eventId = c.req.header("X-Razorpay-Event-Id");
   if (eventId && /^[A-Za-z0-9_-]{6,80}$/.test(eventId)) {
     try {
@@ -112,14 +124,8 @@ app.post("/api/razorpay/webhook", async (c) => {
   }
 
   switch (event.event) {
-    case "payment.captured":
-      console.log("razorpay:payment_captured", event.payload?.payment?.entity?.id);
-      break;
     case "payment.failed":
       console.log("razorpay:payment_failed", event.payload?.payment?.entity?.id);
-      break;
-    case "order.paid":
-      console.log("razorpay:order_paid", event.payload?.order?.entity?.id);
       break;
     case "refund.processed":
       console.log("razorpay:refund_processed", event.payload?.refund?.entity?.id);

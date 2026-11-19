@@ -47,7 +47,7 @@ reconciliationRoutes.post("/run", async (c) => {
   } catch (e) {
     // Queue unavailable: do the work inline rather than silently dropping the request.
     console.error("reconcile_enqueue_failed", { error: (e as Error).message });
-    await reconcileTenant(sql, tenantId);
+    await reconcileTenant(sql, tenantId, c.env);
   }
   return c.json({ job_id: jobId, documents_queued: pending });
 });
@@ -191,7 +191,7 @@ reconciliationRoutes.post("/dataset-upload", rateLimit("dataset", 20, 60), async
     if (duplicates > 0) data.warnings.push(`${duplicates} invoice(s) already on file (same invoice number and amount) were skipped.`);
   }
 
-  const outcome = await reconcileTenant(sql, tenantId);
+  const outcome = await reconcileTenant(sql, tenantId, c.env);
   emit("dataset_upload", { type: data.datasetType.toLowerCase() });
   emit("dataset_rows_imported", { type: data.datasetType.toLowerCase() }, created);
   await appendAuditLog(sql, { tenantId, entityType: "DATASET", entityId: crypto.randomUUID(), action: "DATASET_UPLOADED", reason: `${fileName} — ${data.datasetType}: ${created} rows`, actorEmail: c.get("tenant").ownerEmail });

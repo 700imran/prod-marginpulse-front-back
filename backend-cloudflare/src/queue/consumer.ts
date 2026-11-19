@@ -237,7 +237,7 @@ async function reconcileTenantTask(env: Env, args: Record<string, any>): Promise
   const tenantId = argStr(args, "tenant_id");
   const sql = getDb(env);
   try {
-    const tally = await reconcileTenant(sql, tenantId);
+    const tally = await reconcileTenant(sql, tenantId, env);
     console.log("tenant_reconciliation_completed", { tenantId, ...tally });
   } finally {
     await sql.end();

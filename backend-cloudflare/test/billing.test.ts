@@ -12,8 +12,10 @@ function appWith(sqlLog: string[], upgraded = 0) {
     const q = strings.join("?");
     sqlLog.push(q);
     if (/count\(\*\)/.test(q)) return Promise.resolve([{ n: String(upgraded) }]);
+    if (/from tenants/.test(q)) return Promise.resolve([{ planTier: TENANT.planTier, ownerEmail: TENANT.ownerEmail }]);
     return Promise.resolve([]);
   };
+  sql.begin = async (fn: (tx: unknown) => unknown) => fn(sql); // the upgrade runs in one transaction (see billing/razorpayPlan.ts)
   const app = new Hono<any>();
   app.use("*", async (c, next) => { c.set("tenant", TENANT); c.set("sql", sql); await next(); });
   app.post("/create-order", createOrderHandler);

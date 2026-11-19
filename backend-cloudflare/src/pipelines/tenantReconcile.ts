@@ -1,6 +1,6 @@
 import { emit } from "../observability/events";
 import type { Sql } from "../db";
-import { reconcileBatch, type Invoice, type BankRow } from "./reconciliation";
+import { reconcileBatchBudgeted, type Invoice, type BankRow } from "./reconciliation";
 import { listByStatus } from "../repository/documents";
 import { listUnmatchedBankTransactions } from "../repository/bankTransactions";
 
@@ -13,7 +13,7 @@ const chunks = <T>(a: T[], n = CHUNK): T[][] => { const o: T[][] = []; for (let 
 // All writes are set-based (a handful of statements per 1,000 rows via jsonb_to_recordset) instead of 3 round trips per
 // document: with a real network RTT between the Worker and Postgres the per-row version took minutes for a few
 // thousand rows and was the reason "re-run reconciliation" appeared to hang.
-export async function reconcileTenant(sql: Sql, tenantId: string): Promise<{ reconciled: number; review: number; unmatched: number; failed: number }> {
+export async function reconcileTenant(sql: Sql, tenantId: string, env?: { RECONCILE_MAX_PAIRS?: string; RECONCILE_MAX_TOTAL_PAIRS?: string }): Promise<{ reconciled: number; review: number; unmatched: number; failed: number }> {
   const docs = (await listByStatus(sql, tenantId, "PARSED")).filter((d) => !d.duplicateOfDocumentId && d.docType === "INVOICE");
   const bank = await listUnmatchedBankTransactions(sql, tenantId);
   const invoices: Invoice[] = docs.map((d) => ({
@@ -21,7 +21,13 @@ export async function reconcileTenant(sql: Sql, tenantId: string): Promise<{ rec
     rawTotalAmount: parseFloat(d.rawTotalAmount ?? "0") || 0, documentDate: d.documentDate ?? "",
   }));
   const rows: BankRow[] = bank.map((b) => ({ transactionId: b.transactionId, narration: b.narration ?? "", debitAmount: parseFloat(b.debitAmount) || 0, transactionDate: b.transactionDate }));
-  const results = reconcileBatch(invoices, rows);
+  // Bounded working set: identical to a single global pass unless the data is dense enough to exhaust a Worker's memory (see reconciliation.ts).
+  const results = reconcileBatchBudgeted(invoices, rows, {
+    maxPairs: Number(env?.RECONCILE_MAX_PAIRS) || undefined,
+    maxTotalPairs: Number(env?.RECONCILE_MAX_TOTAL_PAIRS) || undefined,
+    onCapped: (skipped) => { emit("reconciliation_capped", {}, skipped); console.error(JSON.stringify({ level: "error", msg: "reconcile_capped", tenantId, skipped })); },
+    onSliced: (slices) => { emit("reconciliation_sliced", {}, slices); console.warn(JSON.stringify({ level: "warn", msg: "reconcile_sliced", tenantId, invoices: invoices.length, bankRows: rows.length, slices })); },
+  });
   const prevReason = new Map(docs.map((d) => [d.documentId, d.reconciliationReason]));
 
   const tally = { reconciled: 0, review: 0, unmatched: 0, failed: 0 };

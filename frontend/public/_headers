@@ -4,7 +4,7 @@
   X-Content-Type-Options: nosniff
   X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin
-  Permissions-Policy: camera=(), microphone=(), geolocation=(), usb=(), payment=(self "https://checkout.razorpay.com")
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), usb=(), payment=(self "https://checkout.razorpay.com" "https://api.razorpay.com")
   Cross-Origin-Opener-Policy: same-origin-allow-popups
 
 # Build output under /static/ has a content hash in its file name (main.3f9a1c.js), so a given URL never changes:

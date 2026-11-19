@@ -5,11 +5,10 @@ import type { Sql } from "../db";
 import type { TenantContext } from "../auth/supabase";
 import { requireAuth } from "../middleware/auth";
 import { hmacSha256Hex, timingSafeEqual } from "../lib_razorpay_sig";
-import { invalidateTenantCache } from "../auth/supabase";
-import { appendAuditLog } from "../repository/auditLog";
+import { applyPaidPlan, checkRazorpayConfig } from "../billing/razorpayPlan";
 
 import { upiRoutes } from "./upi";
-import { PLANS, TIER_RANK, isPlanId, type PlanId } from "../billing/plans";
+import { PLANS, isPlanId, type PlanId } from "../billing/plans";
 export { PLANS };
 
 async function fetchWithTimeout(
@@ -50,6 +49,9 @@ billingRoutes.get("/usage", async (c) => {
     },
   });
 });
+
+// Owner diagnostic: is Razorpay configured on this Worker, with live keys that Razorpay accepts, and is the webhook secret set? (booleans only, no secrets)
+billingRoutes.get("/config-check", async (c) => c.json(await checkRazorpayConfig(c.env)));
 
 // ─── Razorpay: Create Order ───────────────────────────────
 export const createOrderHandler = async (c: BillingCtx) => {
@@ -188,33 +190,21 @@ export const verifyPaymentHandler = async (c: BillingCtx) => {
     return c.json({ error: "This order does not belong to your account" }, 403);
   }
   if (order.status !== "paid" || order.currency !== "INR" || order.amount !== PLANS[planId].priceInr * 100 || (order.amount_paid ?? order.amount) !== order.amount) {
+    // status "attempted" with a successful checkout usually means the Razorpay account is on MANUAL capture (payment authorised, not
+    // captured) — Razorpay auto-refunds those after a while. Turn on auto-capture in the Razorpay dashboard (Settings → Payment capture).
+    console.error("razorpay:order_not_paid", { orderId: order.id, orderStatus: order.status, amount: order.amount, amountPaid: order.amount_paid });
     emit("payment", { outcome: "not_paid" });
     return c.json({ error: "Payment not completed for the full plan amount" }, 402);
   }
 
-  // Idempotent: the same payment can be verified (or retried) any number of times.
+  // Idempotent and race-safe: the same payment can be verified (or retried) any number of times, and the webhook may be applying
+  // it at the same moment — see billing/razorpayPlan.ts.
   const sql = c.get("sql");
-  const already = await sql<{ n: string }[]>`
-    select count(*)::text as n from audit_log
-    where tenant_id = ${tenant.tenantId} and action = 'PLAN_UPGRADED' and reason like ${"%" + String(razorpay_payment_id).replace(/[%_\\]/g, "") + "%"}`;
-  const newTier = PLANS[planId].tier;
-  let applied = false;
-  if (parseInt(already[0]?.n ?? "0", 10) === 0) {
-    if ((TIER_RANK[tenant.planTier] ?? 0) < PLANS[planId].rank) {
-      await sql`update tenants set plan_tier = ${newTier}, updated_at = now() where tenant_id = ${tenant.tenantId}`;
-      invalidateTenantCache(tenant.tenantId);
-      applied = true;
-    }
-    await appendAuditLog(sql, {
-      tenantId: tenant.tenantId, entityType: "TENANT", entityId: tenant.tenantId, action: "PLAN_UPGRADED",
-      fieldName: "plan_tier", oldValue: tenant.planTier, newValue: applied ? newTier : tenant.planTier,
-      reason: `razorpay payment ${razorpay_payment_id} order ${order.id}${applied ? "" : " (no downgrade applied)"}`,
-      actorEmail: tenant.ownerEmail,
-    });
-  }
-  console.log("razorpay:payment_verified", { orderId: order.id, paymentId: razorpay_payment_id, tenantId: tenant.tenantId, planTier: applied ? newTier : tenant.planTier });
+  const applied = await applyPaidPlan(sql, { tenantId: tenant.tenantId, planId, paymentId: String(razorpay_payment_id), orderId: order.id, source: "verify" });
+  if (applied.status === "no_tenant") return c.json({ error: "Account not found" }, 404);
+  console.log("razorpay:payment_verified", { orderId: order.id, paymentId: razorpay_payment_id, tenantId: tenant.tenantId, planTier: applied.planTier, result: applied.status });
 
   emit("payment", { outcome: "verified", plan: planId });
-  return c.json({ status: "verified", orderId: order.id, paymentId: razorpay_payment_id, planTier: applied ? newTier : tenant.planTier });
+  return c.json({ status: "verified", orderId: order.id, paymentId: razorpay_payment_id, planTier: applied.planTier });
 };
 billingRoutes.post("/verify-payment", verifyPaymentHandler);

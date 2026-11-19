@@ -97,7 +97,9 @@ test("the cron run records its duration under a non-reserved attribute, and the 
   const realFetch = globalThis.fetch; globalThis.fetch = (async () => new Response("{}", { status: 200 })) as any;
   try {
     const before = [...registry.hists.values()].filter((h) => h.name === "marginpulse.cron.duration").reduce((n, h) => n + h.count, 0);
-    const env: any = { HYPERDRIVE: { connectionString: process.env.TEST_DATABASE_URL ?? "postgres://127.0.0.1:1/none" }, OTLP_ENDPOINT: "http://127.0.0.1:1" };
+    // A queue stub that swallows messages: with no queue bound the cron would run detection INLINE for tenants of other
+    // test files that share this database (and pre-empt their assertions when files run in parallel).
+    const env: any = { HYPERDRIVE: { connectionString: process.env.TEST_DATABASE_URL ?? "postgres://127.0.0.1:1/none" }, OTLP_ENDPOINT: "http://127.0.0.1:1", RECONCILE_QUEUE: { sendBatch: async () => {}, send: async () => {} } };
     if (!process.env.TEST_DATABASE_URL) return; // needs a reachable DB to complete a sweep
     await worker.scheduled({} as any, env, { waitUntil() {} } as any);
     const hs = [...registry.hists.values()].filter((h) => h.name === "marginpulse.cron.duration");

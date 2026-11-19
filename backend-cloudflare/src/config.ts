@@ -33,6 +33,8 @@ export interface Env {
   // --- capacity controls (all optional; see docs/CAPACITY.md) ---
   FREE_DOCS_PER_MONTH?: string;        // FREE plan: documents created per calendar month (default 300; "0" = unlimited)
   FREE_BANK_ROWS_PER_MONTH?: string;   // FREE plan: bank rows imported per calendar month (default 5000; "0" = unlimited)
+  RECONCILE_MAX_PAIRS?: string;        // reconciliation memory budget: max candidate (invoice, bank row) pairs held at once (default 400000); denser data is processed in date slices
+  RECONCILE_MAX_TOTAL_PAIRS?: string;  // reconciliation CPU budget: max candidate pairs per run across all slices (default 20000000); invoices beyond it are marked FAILED with a reason
   MAX_HEAVY_INFLIGHT?: string;         // concurrent uploads/imports/reconciles per isolate before shedding with 503 (default 8; "0" = off)
 
   CRON_MAX_TENANTS?: string;           // safety cap on tenants enqueued per daily run (default 200000)
